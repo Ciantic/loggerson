@@ -1,0 +1,7 @@
+{
+    "editor.formatOnSave": true,
+    "rust-analyzer.procMacro.enable": true,
+    "emmet.includeLanguages": {
+        "rust": "html"
+    }
+}
