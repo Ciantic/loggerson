@@ -5,12 +5,12 @@ pub mod types;
 
 use derive_more::From;
 
-use diesel::prelude::*;
+use diesel::r2d2::ConnectionManager;
 use diesel::{
-    backend::Backend, deserialize, r2d2::ConnectionManager, serialize, serialize::Output,
-    types::FromSql, types::ToSql, AsExpression, SqliteConnection,
+    backend::Backend, deserialize, serialize, serialize::Output, AsExpression, SqliteConnection,
 };
-use diesel_migrations::embed_migrations;
+use diesel::{prelude::*, sql_query};
+use diesel_migrations::{embed_migrations, MigrationHarness};
 use r2d2::{Pool, PooledConnection};
 use std::{io::Write, path::PathBuf};
 
@@ -29,7 +29,8 @@ pub struct DbConnection {
     pool: Pool<ConnectionManager<SqliteConnection>>,
 }
 
-embed_migrations!("migrations");
+const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations");
 
 impl DbConnection {
     pub fn new(database_path: &PathBuf) -> Result<Self, Error> {
@@ -44,8 +45,15 @@ impl DbConnection {
             .max_size(15)
             .build(conman)
             .map_err(|_er| Error::ConnectionError)?;
-        embedded_migrations::run_with_output(&pool.get().unwrap(), &mut std::io::stdout())
-            .map_err(|_er| Error::MigrationError)?;
+        let mut migrations = pool.get().unwrap();
+        MigrationHarness::run_pending_migrations(&mut migrations, MIGRATIONS).unwrap();
+
+        // c.immediate_transaction(|cc| {
+        //     use diesel_migrations::MigrationHarness;
+        //     cc.
+        // });
+        // run_with_output(&pool.get().unwrap(), &mut std::io::stdout())
+        //     .map_err(|_er| Error::MigrationError)?;
         Ok(DbConnection { pool })
     }
     // pub fn new(pool: Pool<ConnectionManager<SqliteConnection>>) -> Self {

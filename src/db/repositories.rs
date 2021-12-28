@@ -1,7 +1,12 @@
+use std::io::Read;
+
 use super::models::*;
 use super::types::*;
 use super::DbConnection;
 use super::DbResult;
+use diesel::deserialize::QueryableByName;
+use diesel::sql_query;
+use diesel::sql_types;
 use diesel::{prelude::*, select};
 
 impl Entry {
@@ -10,13 +15,13 @@ impl Entry {
     //     Ok(foo.expect("Error loading posts"))
     // }
 
-    pub fn save(&self, dbc: &DbConnection) -> DbResult<()> {
+    pub fn save(&self, dbc: &mut DbConnection) -> DbResult<()> {
         use super::schema::entrys::dsl::*;
 
         // SQLite and MySQL
         diesel::replace_into(entrys)
             .values(self)
-            .execute(&dbc.get()?)
+            .execute(&mut dbc.get()?)
             .unwrap();
 
         Ok(())
@@ -31,12 +36,12 @@ impl Entry {
         // Ok(())
     }
 
-    pub async fn delete(&self, dbc: &DbConnection) -> DbResult<()> {
+    pub async fn delete(&self, dbc: &mut DbConnection) -> DbResult<()> {
         use super::schema::entrys::dsl::*;
 
         diesel::delete(entrys)
             .filter(id.eq(&self.id))
-            .execute(&dbc.get()?)
+            .execute(&mut dbc.get()?)
             .unwrap();
 
         Ok(())
@@ -57,39 +62,37 @@ impl Entry {
     // }
 }
 
+#[derive(QueryableByName)]
+struct Res {
+    #[sql_type = "sql_types::Integer"]
+    id: RequestId,
+}
+
 impl Request {
     // pub async fn get_all(dbc: &DbConnection) -> DbResult<Vec<Article>> {
     //     let foo = articles.limit(5).load::<Article>(&dbc.get()?);
     //     Ok(foo.expect("Error loading posts"))
     // }
 
-    pub fn save(&self, dbc: &DbConnection) -> DbResult<RequestId> {
-        use super::schema::requests::dsl::*;
-        use diesel::result::DatabaseErrorKind::*;
-        use diesel::result::Error::DatabaseError;
+    pub fn save(&self, dbc: &mut DbConnection) -> DbResult<RequestId> {
+        // use super::schema::requests::dsl::*;
+        // use diesel::result::DatabaseErrorKind::*;
+        // use diesel::result::Error::DatabaseError;
 
-        // TODO: When diesel supports, the right way would be:
-        //
-        // INSERT INTO Urls(Url) VALUES("https://example.com") ON CONFLICT DO UPDATE SET Id=Id RETURNING id;
-        let s = diesel::insert_into(requests)
-            .values(self)
-            .execute(&dbc.get()?);
-        match s {
-            Err(DatabaseError(UniqueViolation, _)) => {
-                let u = requests
-                    .filter(url.eq(&self.url))
-                    .first::<Request>(&dbc.get()?)?;
-                Ok(u.id.unwrap())
-            }
-            Ok(_) => {
-                no_arg_sql_function!(last_insert_rowid, diesel::sql_types::Integer);
-                let generated_id: i32 = select(last_insert_rowid).first(&dbc.get()?)?;
-                Ok(generated_id.into())
-            }
-            Err(_) => {
-                panic!("Upsert failed badly, should not happen")
-            }
-        }
+        let values = sql_query(
+            "
+            INSERT INTO 
+            Requests(method, url, status_code) 
+            VALUES(?, ?, ?) 
+            ON CONFLICT DO UPDATE SET id=id RETURNING id
+            ",
+        )
+        .bind::<sql_types::Text, _>(self.method.clone())
+        .bind::<sql_types::Text, _>(self.url.clone())
+        .bind::<sql_types::Integer, _>(self.status_code)
+        .get_results::<Res>(&mut dbc.get()?)?;
+
+        Ok(values.into_iter().nth(0).unwrap().id)
 
         // }
 

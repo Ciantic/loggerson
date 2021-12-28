@@ -8,7 +8,7 @@ use chrono::NaiveDateTime;
     Identifiable,
     Insertable,
     AsChangeset,
-    Associations,
+    // Associations,
     serde::Serialize,
     serde::Deserialize,
 )]
@@ -25,7 +25,7 @@ pub struct Entry {
     Identifiable,
     Insertable,
     AsChangeset,
-    Associations,
+    // Associations,
     serde::Serialize,
     serde::Deserialize,
 )]
@@ -42,7 +42,7 @@ pub struct Request {
     Identifiable,
     Insertable,
     AsChangeset,
-    Associations,
+    // Associations,
     serde::Serialize,
     serde::Deserialize,
 )]
@@ -58,7 +58,7 @@ pub struct User {
     Identifiable,
     Insertable,
     AsChangeset,
-    Associations,
+    // Associations,
     serde::Serialize,
     serde::Deserialize,
 )]

@@ -1,50 +1,14 @@
 use derive_more::{From, Into};
+use diesel::backend::Backend;
+use diesel::expression::AsExpression;
+use diesel::serialize::{self, Output, ToSql};
+use diesel::sql_types::*;
 use diesel::{
-    backend::Backend, deserialize, serialize, serialize::Output, types::FromSql, types::ToSql,
-    AsExpression,
+    backend::RawValue,
+    deserialize::{self, FromSql},
 };
-use std::{io::Write, net::IpAddr, str::FromStr};
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    AsExpression,
-    FromSqlRow,
-    From,
-    Into,
-)]
-#[sql_type = "diesel::sql_types::Text"]
-pub struct Ip(IpAddr);
-
-impl Ip {
-    pub fn new(addr: IpAddr) -> Ip {
-        Ip(addr)
-    }
-}
-
-impl<DB: Backend> ToSql<diesel::sql_types::Text, DB> for Ip {
-    fn to_sql<W: Write>(&self, out: &mut Output<W, DB>) -> serialize::Result {
-        <String as ToSql<diesel::sql_types::Text, DB>>::to_sql(&self.0.to_string(), out)
-    }
-}
-
-impl<DB: Backend> FromSql<diesel::sql_types::Text, DB> for Ip
-where
-    String: FromSql<diesel::sql_types::Text, DB>,
-{
-    fn from_sql(bytes: Option<&DB::RawValue>) -> deserialize::Result<Self> {
-        let db_value_str = <String as FromSql<diesel::sql_types::Text, DB>>::from_sql(bytes)?;
-        let uuid_value = IpAddr::from_str(&db_value_str)?;
-        Ok(Ip::new(uuid_value))
-    }
-}
+use std::io::Write;
+use std::{net::IpAddr, str::FromStr};
 
 #[allow(unused_macros)]
 macro_rules! generate_uuid_field {
@@ -80,7 +44,7 @@ macro_rules! generate_uuid_field {
             DB: Backend,
             String: ToSql<diesel::sql_types::Text, DB>,
         {
-            fn to_sql<W: Write>(&self, out: &mut Output<W, DB>) -> serialize::Result {
+            fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, DB>) -> serialize::Result {
                 <String as ToSql<diesel::sql_types::Text, DB>>::to_sql(
                     &self.0.to_hyphenated().to_string(),
                     out,
@@ -93,7 +57,7 @@ macro_rules! generate_uuid_field {
             DB: Backend,
             String: FromSql<diesel::sql_types::Text, DB>,
         {
-            fn from_sql(bytes: Option<&DB::RawValue>) -> deserialize::Result<Self> {
+            fn from_sql(bytes: RawValue<DB>) -> deserialize::Result<Self> {
                 let db_value_str =
                     <String as FromSql<diesel::sql_types::Text, DB>>::from_sql(bytes)?;
                 let uuid_value = uuid::Uuid::parse_str(&db_value_str)?;
@@ -141,7 +105,7 @@ macro_rules! generate_id_field {
             DB: Backend,
             i32: ToSql<diesel::sql_types::Integer, DB>,
         {
-            fn to_sql<W: Write>(&self, out: &mut Output<W, DB>) -> serialize::Result {
+            fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, DB>) -> serialize::Result {
                 <i32 as ToSql<diesel::sql_types::Integer, DB>>::to_sql(&self.0, out)
             }
         }
@@ -151,7 +115,7 @@ macro_rules! generate_id_field {
             DB: Backend,
             i32: FromSql<diesel::sql_types::Integer, DB>,
         {
-            fn from_sql(bytes: Option<&DB::RawValue>) -> deserialize::Result<Self> {
+            fn from_sql(bytes: RawValue<DB>) -> deserialize::Result<Self> {
                 let db_value_str = <i32>::from_sql(bytes)?;
                 Ok($name(db_value_str))
             }
