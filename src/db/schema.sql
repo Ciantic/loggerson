@@ -1,7 +1,11 @@
 PRAGMA foreign_keys=1;
 
-DROP TABLE IF EXISTS entrys;
-CREATE TABLE entrys (
+-- DROP TABLE IF EXISTS requests;
+-- DROP TABLE IF EXISTS users;
+-- DROP TABLE IF EXISTS entrys;
+-- DROP TABLE IF EXISTS useragents;
+
+CREATE TABLE IF NOT EXISTS entrys (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp       BIG INT         NOT NULL,
   request_id      INTEGER         NOT NULL,
@@ -11,8 +15,7 @@ CREATE TABLE entrys (
   UNIQUE(timestamp, request_id, user_id)
 );
 
-DROP TABLE IF EXISTS requests;
-CREATE TABLE requests (
+CREATE TABLE IF NOT EXISTS requests (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   method          VARCHAR(7)      NOT NULL,
   url             VARCHAR(2048)   NOT NULL,
@@ -20,16 +23,14 @@ CREATE TABLE requests (
   UNIQUE(method, url, status_code)
 );
 
-DROP TABLE IF EXISTS users;
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  hash            VARCHAR(512)   NOT NULL UNIQUE,
+  hash            BLOB           NOT NULL UNIQUE,
   useragent_id    INTEGER        NOT NULL,
   FOREIGN KEY(useragent_id) REFERENCES useragents(id)
 );
 
-DROP TABLE IF EXISTS useragents;
-CREATE TABLE useragents (
+CREATE TABLE IF NOT EXISTS useragents (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   value      VARCHAR(2048)      NOT NULL UNIQUE
 );

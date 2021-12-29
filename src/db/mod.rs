@@ -1,73 +1,84 @@
-pub mod models;
-pub mod repositories;
-pub mod schema;
-pub mod types;
+use std::net::IpAddr;
 
-use derive_more::From;
-
-use diesel::r2d2::ConnectionManager;
-use diesel::{
-    backend::Backend, deserialize, serialize, serialize::Output, AsExpression, SqliteConnection,
-};
-use diesel::{prelude::*, sql_query};
-use diesel_migrations::{embed_migrations, MigrationHarness};
+use itertools::Itertools;
 use r2d2::{Pool, PooledConnection};
-use std::{io::Write, path::PathBuf};
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, Transaction};
+use sha2::{Digest, Sha256};
 
-#[derive(Debug, From)]
-pub enum Error {
-    NotFound,
-    MigrationError,
-    ConnectionError,
-    OtherDbError(diesel::result::Error),
+use crate::LogEntry;
+
+const SCHEMA: &str = include_str!("schema.sql");
+
+fn create_schema(conn: &PooledConnection<SqliteConnectionManager>) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(SCHEMA)
 }
 
-pub type DbResult<T> = Result<T, Error>;
-
-#[derive(Clone)]
-pub struct DbConnection {
-    pool: Pool<ConnectionManager<SqliteConnection>>,
+pub fn init(path: &str) -> Result<Pool<SqliteConnectionManager>, rusqlite::Error> {
+    let manager = SqliteConnectionManager::file(path);
+    let pool = r2d2::Pool::new(manager).unwrap();
+    let conn = pool.get().unwrap();
+    create_schema(&conn)?;
+    Ok(pool)
 }
 
-const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
-    diesel_migrations::embed_migrations!("migrations");
+pub fn add(conn: &Transaction, entry: &LogEntry) -> i32 {
+    let request_id: i32 = conn
+        .query_row(
+            "
+            INSERT INTO 
+            requests(method, url, status_code) 
+            VALUES(?, ?, ?) 
+            ON CONFLICT DO UPDATE SET id=id RETURNING id
+            ",
+            params![&entry.method, &entry.url, &entry.status],
+            |row| Ok(row.get_unwrap(0)),
+        )
+        .unwrap();
 
-impl DbConnection {
-    pub fn new(database_path: &PathBuf) -> Result<Self, Error> {
-        let db_url = &database_path.to_string_lossy().into_owned();
-        // Ok(DbConnection::new_from_url(db_url).await?)
-        Ok(DbConnection::new_from_url(db_url)?)
-    }
+    let useragent_id: i32 = conn
+        .query_row(
+            "
+            INSERT INTO 
+            useragents(value) 
+            VALUES(?) 
+            ON CONFLICT DO UPDATE SET id=id RETURNING id
+            ",
+            params![&entry.userAgent],
+            |row| Ok(row.get_unwrap(0)),
+        )
+        .unwrap();
 
-    pub fn new_from_url(database_url: &str) -> Result<Self, Error> {
-        let conman = ConnectionManager::<SqliteConnection>::new(database_url);
-        let pool = Pool::builder()
-            .max_size(15)
-            .build(conman)
-            .map_err(|_er| Error::ConnectionError)?;
-        let mut migrations = pool.get().unwrap();
-        MigrationHarness::run_pending_migrations(&mut migrations, MIGRATIONS).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(&entry.ip.to_string());
+    hasher.update(&entry.userAgent);
+    let hash = hasher.finalize();
 
-        // c.immediate_transaction(|cc| {
-        //     use diesel_migrations::MigrationHarness;
-        //     cc.
-        // });
-        // run_with_output(&pool.get().unwrap(), &mut std::io::stdout())
-        //     .map_err(|_er| Error::MigrationError)?;
-        Ok(DbConnection { pool })
-    }
-    // pub fn new(pool: Pool<ConnectionManager<SqliteConnection>>) -> Self {
-    //     DbConnection { pool }
-    // }
+    let user_id: i32 = conn
+        .query_row(
+            "
+            INSERT INTO
+            users(hash, useragent_id)
+            VALUES(?, ?)
+            ON CONFLICT DO UPDATE SET id=id RETURNING id
+            ",
+            params![&hash.as_slice(), &useragent_id],
+            |row| Ok(row.get_unwrap(0)),
+        )
+        .unwrap();
 
-    pub fn get(&self) -> DbResult<PooledConnection<ConnectionManager<SqliteConnection>>> {
-        let c: PooledConnection<ConnectionManager<SqliteConnection>> = self
-            .pool
-            .get_timeout(std::time::Duration::from_secs(12))
-            .map_err(|_| Error::ConnectionError)?;
-        Ok(c)
-    }
+    let entry_id: i32 = conn
+        .query_row(
+            "
+        INSERT INTO
+        entrys(timestamp, request_id, user_id)
+        VALUES(?, ?, ?)
+        ON CONFLICT DO UPDATE SET id=id RETURNING id
+        ",
+            params![&entry.timestamp.timestamp(), &request_id, &user_id],
+            |row| Ok(row.get_unwrap(0)),
+        )
+        .unwrap();
+
+    return entry_id;
 }
-
-// unsafe impl Send for DbConnection {}
-// unsafe impl Sync for DbConnection {}

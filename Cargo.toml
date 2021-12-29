@@ -2,25 +2,30 @@
 name = "loggerson"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 serde = "1.0"
 serde_json = "1.0"
-serde_yaml = "0.8"
+# serde_yaml = "0.8"
 # libsqlite3-sys = { version = "0.23" }
 # diesel = { version = "1.4", features = ["sqlite", "chrono", "r2d2"] }
 # diesel_migrations = { version = "1.4", features = ["sqlite"] }
-diesel_migrations = { version = "^2.0.0", git = "https://github.com/diesel-rs/diesel/"}
-diesel = { version = "^2.0.0", features = ["sqlite", "chrono", "r2d2"], git = "https://github.com/diesel-rs/diesel" }
+# diesel_migrations = { version = "^2.0.0", git = "https://github.com/diesel-rs/diesel/"}
+# diesel = { version = "^2.0.0", features = ["sqlite", "chrono", "r2d2"], git = "https://github.com/diesel-rs/diesel" }
+regex = "1.5"
+rayon = "1.5"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "0.8", features = ["serde", "v4"] }
+# uuid = { version = "0.8", features = ["serde", "v4"] }
+itertools = "0.10"
 url = { version = "2.2", features = ["serde"] }
 derive_more = "0.99"
 r2d2 = "0.8"
 r2d2_sqlite = "0.19"
 access_log_parser = "0.6"
+sha2 = "0.10"
 
 [dependencies.rusqlite]
 version = "0.26.0"
