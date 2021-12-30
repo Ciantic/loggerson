@@ -26,6 +26,7 @@ r2d2 = "0.8"
 r2d2_sqlite = "0.19"
 access_log_parser = "0.6"
 sha2 = "0.10"
+once_cell = "1.9"
 
 [dependencies.rusqlite]
 version = "0.26.0"
