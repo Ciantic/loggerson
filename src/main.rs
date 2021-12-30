@@ -5,7 +5,7 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::io::BufRead;
 
-use crate::db::{init, BatchInsertor};
+use crate::db::{init, BatchCache, BatchInsertor};
 
 mod db;
 
@@ -16,7 +16,7 @@ enum ParseError {
 }
 
 pub struct LogEntry {
-    pub hash: Vec<u8>,
+    pub hash: String,
     pub timestamp: DateTime<FixedOffset>,
     pub method: String,
     pub url: String,
@@ -27,7 +27,7 @@ pub struct LogEntry {
 
 fn main() {
     // let pool = init(".cache.db").unwrap();
-    let pool = init(".cache.db").unwrap();
+    let conpool = init(".cache.db").unwrap();
 
     // https://httpd.apache.org/docs/2.4/logs.html
     // (Looks like double quoted values need not escpaing support)
@@ -44,94 +44,108 @@ fn main() {
     let lines = read_lines(".cache/access_log").unwrap();
 
     let par = lines.chunks(100000);
+    let mut cache = BatchCache::new();
     let stuff = par
         .into_iter()
         // .into_iter()
         // .par_bridge()
         .map(|chunkedlines| -> Result<(), ParseError> {
-            let mut c = pool.clone().get().unwrap();
             let mut lines = chunkedlines.collect::<Vec<_>>();
-            let gaah = lines
-                .par_drain(..)
-                .map(|lineresult| -> Result<LogEntry, ParseError> {
-                    let line = lineresult.unwrap();
-                    if let Some(captures) = re.captures(&line) {
-                        if let (
-                            Some(ipmatch),
-                            Some(datematch),
-                            Some(methodmatch),
-                            Some(urlmatch),
-                            Some(protomatch),
-                            Some(statusmatch),
-                            Some(bytesmatch),
-                            Some(referrermatch),
-                            Some(useragentmatch),
-                        ) = (
-                            captures.get(1),
-                            captures.get(2),
-                            captures.get(3),
-                            captures.get(4),
-                            captures.get(5),
-                            captures.get(6),
-                            captures.get(7),
-                            captures.get(8),
-                            captures.get(9),
-                        ) {
-                            let ip =
-                                IpAddr::from_str(ipmatch.as_str()).map_err(|_| ParsingError)?;
-                            let dtime = chrono::DateTime::parse_from_str(
-                                datematch.as_str(),
-                                "%d/%b/%Y:%H:%M:%S %z",
-                            )
-                            .map_err(|_| ParsingError)?;
-                            let method = methodmatch.as_str();
-                            let url = urlmatch.as_str();
-                            let useragent = useragentmatch.as_str();
-                            let referrer = referrermatch.as_str();
-                            let status = statusmatch
-                                .as_str()
-                                .parse::<i32>()
+            let entriespar =
+                lines
+                    .par_drain(..)
+                    .map(|lineresult| -> Result<LogEntry, ParseError> {
+                        let line = lineresult.unwrap();
+                        if let Some(captures) = re.captures(&line) {
+                            if let (
+                                Some(ipmatch),
+                                Some(datematch),
+                                Some(methodmatch),
+                                Some(urlmatch),
+                                Some(protomatch),
+                                Some(statusmatch),
+                                Some(bytesmatch),
+                                Some(referrermatch),
+                                Some(useragentmatch),
+                            ) = (
+                                captures.get(1),
+                                captures.get(2),
+                                captures.get(3),
+                                captures.get(4),
+                                captures.get(5),
+                                captures.get(6),
+                                captures.get(7),
+                                captures.get(8),
+                                captures.get(9),
+                            ) {
+                                let ip =
+                                    IpAddr::from_str(ipmatch.as_str()).map_err(|_| ParsingError)?;
+                                let dtime = chrono::DateTime::parse_from_str(
+                                    datematch.as_str(),
+                                    "%d/%b/%Y:%H:%M:%S %z",
+                                )
                                 .map_err(|_| ParsingError)?;
+                                let method = methodmatch.as_str();
+                                let url = urlmatch.as_str();
+                                let useragent = useragentmatch.as_str();
+                                let referrer = referrermatch.as_str();
+                                let status = statusmatch
+                                    .as_str()
+                                    .parse::<i32>()
+                                    .map_err(|_| ParsingError)?;
 
-                            let mut hasher = Sha256::new();
-                            hasher.update(ipmatch.as_str());
-                            hasher.update(&useragent);
-                            let hash = hasher.finalize();
-                            Ok(LogEntry {
-                                hash: hash.as_slice().to_owned(),
-                                timestamp: dtime,
-                                method: method.to_owned(),
-                                url: url.to_owned(),
-                                referrer: referrer.to_owned(),
-                                status: status,
-                                useragent: useragent.to_owned(),
-                            })
+                                let mut hasher = Sha256::new();
+                                hasher.update(ipmatch.as_str());
+                                hasher.update(&useragent);
+                                let hashbytes = hasher.finalize();
+                                let mut hash = String::with_capacity(32);
+                                use std::fmt::Write;
+                                for &b in hashbytes.as_slice() {
+                                    write!(&mut hash, "{:02x}", b).unwrap();
+                                }
+                                // println!("hash {}", hash);
+
+                                Ok(LogEntry {
+                                    hash: hash,
+                                    timestamp: dtime,
+                                    method: method.to_owned(),
+                                    url: url.to_owned(),
+                                    referrer: referrer.to_owned(),
+                                    status: status,
+                                    useragent: useragent.to_owned(),
+                                })
+                            } else {
+                                // TODO: Collect errors and send in a channel to report on stderr
+                                // println!("Parsing row failed {}", &line);
+                                Err(ParsingError)
+                            }
                         } else {
-                            // TODO: Collect errors and send in a channel to report on stderr
-                            // println!("Parsing row failed {}", &l);
+                            // println!("Parsing row failed 2 {}", &line);
                             Err(ParsingError)
                         }
-                    } else {
-                        // println!("Parsing row failed 2 {}", &l);
-                        Err(ParsingError)
-                    }
-                });
+                    });
 
-            let tx = c.transaction().unwrap();
-            let rows = gaah.collect::<Vec<_>>();
+            let entries = entriespar.collect::<Vec<_>>();
+
+            let mut con = conpool.clone().get().unwrap();
+            let tx = con.transaction().unwrap();
             {
-                let mut insertor = BatchInsertor::new(&tx);
-                rows.iter().for_each(|r| {
+                println!("STARTED A CHUNK {}", entries.len());
+                println!(
+                    "Cache? {} {} {}",
+                    &cache.requests_cache.len(),
+                    &cache.users_cache.len(),
+                    &cache.useragents_cache.len()
+                );
+                let mut insertor = BatchInsertor::new(&tx, &mut cache);
+
+                entries.iter().for_each(|r| {
                     if let Ok(row) = r {
                         insertor.add(&row);
+                    } else {
                     }
                 });
                 println!("ADDED A CHUNK");
-                // rows.into_iter().for_each(|r| {
-                //     if let Ok(row) = r {
-                //         insertor.add(&row);
-                //     }
-                // });
             }
             tx.commit().unwrap();
             println!("COMMITED A CHUNK");
