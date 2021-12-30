@@ -1,12 +1,10 @@
-use std::{collections::HashMap, net::IpAddr};
+use std::collections::HashMap;
 
-use itertools::Itertools;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Batch, CachedStatement, Transaction};
-use sha2::{Digest, Sha256};
+use rusqlite::{params, CachedStatement, Connection, Transaction};
 
-use crate::LogEntry;
+use crate::{LogEntry, Request, User, Useragent};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -14,19 +12,22 @@ fn create_schema(conn: &PooledConnection<SqliteConnectionManager>) -> Result<(),
     conn.execute_batch(SCHEMA)
 }
 
+// static DBPOOL: OnceCell<Pool<SqliteConnectionManager>> = OnceCell::new();
+
 pub fn init(path: &str) -> Result<Pool<SqliteConnectionManager>, rusqlite::Error> {
     // let manager = SqliteConnectionManager::memory();
     let manager = SqliteConnectionManager::file(path);
     let pool = r2d2::Pool::new(manager).unwrap();
     let conn = pool.get().unwrap();
     create_schema(&conn)?;
+    // DBPOOL.set(pool.clone()).unwrap();
     Ok(pool)
 }
 
 pub struct BatchCache {
-    pub useragents_cache: HashMap<String, i32>,
-    pub users_cache: HashMap<String, i32>,
-    pub requests_cache: HashMap<(String, String, i32), i32>,
+    pub useragents_cache: HashMap<Useragent, i32>,
+    pub users_cache: HashMap<User, i32>,
+    pub requests_cache: HashMap<Request, i32>,
 }
 
 impl BatchCache {
@@ -38,60 +39,133 @@ impl BatchCache {
         }
     }
 
-    pub fn populate(&mut self, con: PooledConnection<SqliteConnectionManager>) {
-        // TODO: Populate caches...
+    fn populate_requests_cache(&mut self, con: &Connection, first: i64, last: i64) {
+        // Get all requests
+        let mut reqstmt = con
+            .prepare(
+                "
+                    SELECT DISTINCT r.id, r.method, r.url, r.status_code
+                    FROM entrys e, requests r
+                    WHERE e.request_id = r.id
+                    AND e.timestamp >= ? AND e.timestamp <= ?",
+            )
+            .unwrap();
+
+        let requests = reqstmt
+            .query_map(params![first, last], |row| {
+                Ok((
+                    row.get::<_, i32>(3).unwrap(),
+                    Request {
+                        method: row.get(1).unwrap(),
+                        url: row.get(2).unwrap(),
+                        status_code: row.get(3).unwrap(),
+                    },
+                ))
+            })
+            .unwrap();
+
+        for row in requests {
+            if let Ok((id, req)) = row {
+                self.requests_cache.insert(req, id);
+            }
+        }
+    }
+
+    fn populate_users_cache(&mut self, con: &Connection, first: i64, last: i64) {
+        // Get all users and their useragents
+        let mut reqstmt = con
+            .prepare(
+                "
+                SELECT 
+                    DISTINCT 
+                    u.id as user_id, 
+                    u.useragent_id, 
+                    u.hash as user_hash, 
+                    ua.value as useragent_value
+                FROM entrys e, users u, useragents ua 
+                WHERE 
+                    e.user_id = u.id AND u.useragent_id = ua.id 
+                    AND e.timestamp >= ? AND e.timestamp <= ?",
+            )
+            .unwrap();
+
+        let query = reqstmt
+            .query_map(params![first, last], |row| {
+                Ok((
+                    row.get::<_, i32>(0).unwrap(),
+                    row.get::<_, i32>(1).unwrap(),
+                    User {
+                        hash: row.get(2).unwrap(),
+                        useragent: Useragent {
+                            value: row.get(3).unwrap(),
+                        },
+                    },
+                ))
+            })
+            .unwrap();
+
+        for row in query {
+            if let Ok((user_id, useragent_id, user)) = row {
+                self.useragents_cache
+                    .insert(user.useragent.clone(), useragent_id);
+                self.users_cache.insert(user, user_id);
+            }
+        }
+    }
+
+    pub fn populate(&mut self, con: &Connection, entries: &Vec<LogEntry>) {
+        let first = entries.first().unwrap().timestamp;
+        let last = entries.last().unwrap().timestamp;
+        self.populate_requests_cache(con, first, last);
+        self.populate_users_cache(con, first, last);
     }
 }
 
 pub struct BatchInsertor<'conn, 'cache> {
-    add_requests: CachedStatement<'conn>,
-    add_useragents: CachedStatement<'conn>,
-    add_users: CachedStatement<'conn>,
-    add_entrys: CachedStatement<'conn>,
+    requests_stmt: CachedStatement<'conn>,
+    useragents_stmt: CachedStatement<'conn>,
+    users_stmt: CachedStatement<'conn>,
+    entrys_stmt: CachedStatement<'conn>,
     cache: &'cache mut BatchCache,
+    tx: &'conn Transaction<'conn>,
 }
 
 impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
     pub fn new(
-        conn: &'conn Transaction,
+        tx: &'conn Transaction,
         cache: &'cache mut BatchCache,
     ) -> BatchInsertor<'conn, 'cache> {
-        // It is expensive to check from DB all the time if the stuff exists,
-        // thus the ID's are cached
-
-        let add_requests = conn
+        let requests_stmt = tx
             .prepare_cached(
                 "
                 INSERT INTO 
                 requests(method, url, status_code) 
-                VALUES(?, ?, ?) 
-                ON CONFLICT DO UPDATE SET id=id RETURNING id
+                VALUES(?, ?, ?) RETURNING id
             ",
             )
             .unwrap();
-        let add_useragents = conn
+
+        let useragents_stmt = tx
             .prepare_cached(
                 "
                 INSERT INTO 
                 useragents(value) 
-                VALUES(?) 
-                ON CONFLICT DO UPDATE SET id=id RETURNING id
+                VALUES(?) RETURNING id
             ",
             )
             .unwrap();
 
-        let add_users = conn
+        let users_stmt = tx
             .prepare_cached(
                 "
                 INSERT INTO
                 users(hash, useragent_id)
-                VALUES(?, ?)
-                ON CONFLICT DO UPDATE SET id=id RETURNING id
+                VALUES(?, ?) RETURNING id
                 ",
             )
             .unwrap();
 
-        let add_entrys = conn
+        let entrys_stmt = tx
             .prepare_cached(
                 "
                 INSERT INTO
@@ -103,62 +177,59 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
             .unwrap();
 
         BatchInsertor {
-            add_entrys,
-            add_requests,
-            add_useragents,
-            add_users,
+            entrys_stmt,
+            requests_stmt,
+            useragents_stmt,
+            users_stmt,
             cache,
+            tx,
         }
     }
 
-    fn get_request_id(&mut self, entry: &LogEntry) -> i32 {
-        let key = (
-            entry.method.clone(),
-            entry.url.clone(),
-            entry.status.clone(),
-        );
-        if let Some(v) = self.cache.requests_cache.get(&key) {
+    fn get_request_id(&mut self, request: &Request) -> i32 {
+        if let Some(v) = self.cache.requests_cache.get(&request) {
             // println!("HIT CACHE request_id");
             return v.to_owned();
         }
 
         let id = self
-            .add_requests
-            .query_row(params![&entry.method, &entry.url, &entry.status], |row| {
-                Ok(row.get_unwrap(0))
-            })
+            .requests_stmt
+            .query_row(
+                params![&request.method, &request.url, &request.status_code],
+                |row| Ok(row.get_unwrap(0)),
+            )
             .unwrap();
-        self.cache.requests_cache.insert(key, id);
+        self.cache.requests_cache.insert(request.clone(), id);
         id
     }
 
-    fn get_useragent_id(&mut self, entry: &LogEntry) -> i32 {
-        let key = entry.useragent.clone();
+    fn get_useragent_id(&mut self, useragent: &Useragent) -> i32 {
+        let key = useragent.clone();
         if let Some(v) = self.cache.useragents_cache.get(&key) {
             // println!("HIT CACHE useragent_id");
             return v.to_owned();
         }
 
         let id = self
-            .add_useragents
-            .query_row(params![&entry.useragent], |row| Ok(row.get_unwrap(0)))
+            .useragents_stmt
+            .query_row(params![&useragent.value], |row| Ok(row.get_unwrap(0)))
             .unwrap();
 
         self.cache.useragents_cache.insert(key, id);
         id
     }
 
-    fn get_user_id(&mut self, entry: &LogEntry) -> i32 {
-        let key = entry.user_hash.clone();
+    fn get_user_id(&mut self, user: &User) -> i32 {
+        let key = user.clone();
         if let Some(v) = self.cache.users_cache.get(&key) {
             // println!("HIT CACHE user_id");
             return v.to_owned();
         }
 
-        let useragent_id = self.get_useragent_id(&entry);
+        let useragent_id = self.get_useragent_id(&user.useragent);
         let id = self
-            .add_users
-            .query_row(params![&entry.user_hash, &useragent_id], |row| {
+            .users_stmt
+            .query_row(params![&user.hash, &useragent_id], |row| {
                 Ok(row.get_unwrap(0))
             })
             .unwrap();
@@ -166,11 +237,38 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
         id
     }
 
-    pub fn add(&mut self, entry: &LogEntry) {
-        let request_id = self.get_request_id(&entry);
-        let user_id: i32 = self.get_user_id(&entry);
-        self.add_entrys
-            .execute(params![&entry.timestamp.timestamp(), &request_id, &user_id])
+    fn add(&mut self, entry: &LogEntry) {
+        let request_id = self.get_request_id(&entry.request);
+        let user_id: i32 = self.get_user_id(&entry.user);
+        self.entrys_stmt
+            .execute(params![&entry.timestamp, &request_id, &user_id])
             .unwrap();
+    }
+
+    // pub fn add_entries<'a, I>(&mut self, entries: I)
+    // where
+    //     I: Iterator<Item = &'a LogEntry>,
+    // {
+
+    // }
+
+    pub fn add_entries(&mut self, entries: &Vec<LogEntry>) {
+        self.cache.populate(&self.tx, entries);
+        {
+            println!(
+                "Cache? {} {} {}",
+                &self.cache.requests_cache.len(),
+                &self.cache.users_cache.len(),
+                &self.cache.useragents_cache.len()
+            );
+
+            for (n, r) in entries.iter().enumerate() {
+                if n % 1000 == 0 {
+                    println!("Sqlite add calls {}", n);
+                }
+                self.add(&r);
+            }
+            println!("ADDED A CHUNK");
+        }
     }
 }

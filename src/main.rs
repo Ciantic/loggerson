@@ -2,6 +2,7 @@ use chrono::{DateTime, FixedOffset};
 use itertools::Either;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
 use regex::Regex;
@@ -28,14 +29,34 @@ static COMBINED_LOG_REGEX: Lazy<Regex> = Lazy::new(|| {
     ).unwrap()
 });
 
+#[derive(PartialEq, Eq, Clone, Hash)]
+struct Entry {}
+
+#[derive(PartialEq, Eq, Clone, Hash)]
+pub struct Request {
+    method: String,
+    url: String,
+    status_code: i32,
+}
+
+#[derive(PartialEq, Eq, Clone, Hash)]
+pub struct User {
+    hash: String,
+    useragent: Useragent,
+    // TODO: Country struct
+}
+
+#[derive(PartialEq, Eq, Clone, Hash)]
+pub struct Useragent {
+    value: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct LogEntry {
-    pub user_hash: String,
-    pub timestamp: DateTime<FixedOffset>,
-    pub method: String,
-    pub url: String,
-    pub status: i32,
-    pub useragent: String,
-    pub referrer: String,
+    timestamp: i64,
+    request: Request,
+    user: User,
+    // TODO: Referrer struct
 }
 
 impl LogEntry {
@@ -87,13 +108,18 @@ impl LogEntry {
                 // println!("hash {}", hash);
 
                 Ok(LogEntry {
-                    user_hash: hash,
-                    timestamp: dtime,
-                    method: method.to_owned(),
-                    url: url.to_owned(),
-                    referrer: referrer.to_owned(),
-                    status: status,
-                    useragent: useragent.to_owned(),
+                    timestamp: dtime.timestamp(),
+                    user: User {
+                        hash: hash,
+                        useragent: Useragent {
+                            value: useragent.to_owned(),
+                        },
+                    },
+                    request: Request {
+                        method: method.to_owned(),
+                        status_code: status,
+                        url: url.to_owned(),
+                    },
                 })
             } else {
                 // println!("Parsing row failed 1 {}", &line);
@@ -115,66 +141,52 @@ fn main() {
 
     let par = lines.chunks(100000);
     let mut cache = BatchCache::new();
-    let stuff = par
-        .into_iter()
-        .map(|chunkedlines| -> Result<(), ParseError> {
-            let start_of_chunk_time = Instant::now();
-            let mut lines = chunkedlines.collect::<Vec<_>>();
+    let stuff =
+        par.into_iter()
+            .enumerate()
+            .map(|(chunk_n, chunkedlines)| -> Result<(), ParseError> {
+                let start_of_chunk_time = Instant::now();
+                let mut lines = chunkedlines.collect::<Vec<_>>();
 
-            println!("Start parsing a chunk sized {}...", lines.len());
-
-            let entriespar =
-                lines
+                // Parse all rows in parllel
+                println!("Parsing a chunk {} sized {}...", chunk_n + 1, lines.len());
+                let parse_results = lines
                     .par_drain(..)
-                    .map(|lineresult| -> Result<LogEntry, ParseError> {
-                        LogEntry::parse(lineresult.unwrap())
+                    .map(|lineresult| LogEntry::parse(lineresult.unwrap()));
+
+                // Separate failures and successes
+                let (mut entries, failures): (Vec<LogEntry>, Vec<ParseError>) = parse_results
+                    .partition_map(|v| match v {
+                        Ok(v) => Either::Left(v),
+                        Err(e) => Either::Right(e),
                     });
 
-            let (mut entries, failures): (Vec<LogEntry>, Vec<ParseError>) = entriespar
-                .partition_map(|v| match v {
-                    Ok(v) => Either::Left(v),
-                    Err(e) => Either::Right(e),
-                });
-
-            entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-
-            println!(
-                "Parsed a chunk in {} ms, successes {}, failures {}.",
-                (Instant::now() - start_of_chunk_time).as_millis(),
-                entries.len(),
-                failures.len()
-            );
-
-            println!("Inserting chunk to a database...");
-
-            let mut con = conpool.clone().get().unwrap();
-            let tx = con.transaction().unwrap();
-            {
-                if let (Some(first), Some(last)) = (entries.first(), entries.last()) {
-                    println!("Timespan: {} to {}", first.timestamp, last.timestamp);
-                }
+                // Sort by timestamp
+                entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
                 println!(
-                    "Cache? {} {} {}",
-                    &cache.requests_cache.len(),
-                    &cache.users_cache.len(),
-                    &cache.useragents_cache.len()
+                    "Parsed a chunk in {} ms, successes {}, failures {}.",
+                    (Instant::now() - start_of_chunk_time).as_millis(),
+                    entries.len(),
+                    failures.len()
                 );
-                let mut insertor = BatchInsertor::new(&tx, &mut cache);
 
-                entries.iter().enumerate().for_each(|(n, r)| {
-                    if n % 1000 == 0 {
-                        println!("Sqlite add calls {}", n);
-                    }
-                    insertor.add(&r);
-                });
-                println!("ADDED A CHUNK");
-            }
-            tx.commit().unwrap();
-            println!("COMMITED A CHUNK");
+                let first = entries.first().unwrap();
+                let last = entries.last().unwrap();
+                println!(
+                    "Inserting to database all chunks between {} and {}...",
+                    first.timestamp, last.timestamp
+                );
 
-            Ok(())
-        });
+                let mut conn = conpool.get().unwrap();
+                let tx = conn.transaction().unwrap();
+                {
+                    let mut insertor = BatchInsertor::new(&tx, &mut cache);
+                    insertor.add_entries(&entries);
+                }
+                tx.commit().unwrap();
+                Ok(())
+            });
 
     stuff.for_each(|r| {});
 }
