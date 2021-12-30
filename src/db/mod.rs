@@ -149,7 +149,7 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
     }
 
     fn get_user_id(&mut self, entry: &LogEntry) -> i32 {
-        let key = entry.hash.clone();
+        let key = entry.user_hash.clone();
         if let Some(v) = self.cache.users_cache.get(&key) {
             // println!("HIT CACHE user_id");
             return v.to_owned();
@@ -158,7 +158,7 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
         let useragent_id = self.get_useragent_id(&entry);
         let id = self
             .add_users
-            .query_row(params![&entry.hash, &useragent_id], |row| {
+            .query_row(params![&entry.user_hash, &useragent_id], |row| {
                 Ok(row.get_unwrap(0))
             })
             .unwrap();

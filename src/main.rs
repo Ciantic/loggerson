@@ -24,12 +24,12 @@ pub enum ParseError {
 // (Looks like double quoted values need not escaping support?)
 static COMBINED_LOG_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r#"^([^ ]+) [^ ]+ [^ ]+ \[([^\]]+)\] "([^ "]+) ([^ "]+) ([^ "]+)" (\d+) (\d+) "([^"]+)" "([^"]+)""#,
+        r#"^(?P<ip>[^ ]+) [^ ]+ [^ ]+ \[(?P<date>[^\]]+)\] "(?P<method>[^ "]+) (?P<url>[^ "]+) (?P<proto>[^ "]+)" (?P<status>\d+) (?P<bytes>\d+) "(?P<referrer>[^"]*)" "(?P<useragent>[^"]*)""#,
     ).unwrap()
 });
 
 pub struct LogEntry {
-    pub hash: String,
+    pub user_hash: String,
     pub timestamp: DateTime<FixedOffset>,
     pub method: String,
     pub url: String,
@@ -47,21 +47,21 @@ impl LogEntry {
                 Some(datematch),
                 Some(methodmatch),
                 Some(urlmatch),
-                Some(_protomatch),
+                // Some(_protomatch),
                 Some(statusmatch),
-                Some(_bytesmatch),
+                // Some(_bytesmatch),
                 Some(referrermatch),
                 Some(useragentmatch),
             ) = (
-                captures.get(1),
-                captures.get(2),
-                captures.get(3),
-                captures.get(4),
-                captures.get(5),
-                captures.get(6),
-                captures.get(7),
-                captures.get(8),
-                captures.get(9),
+                captures.name("ip"),
+                captures.name("date"),
+                captures.name("method"),
+                captures.name("url"),
+                // captures.name("proto"),
+                captures.name("status"),
+                // captures.name("bytes"),
+                captures.name("referrer"),
+                captures.name("useragent"),
             ) {
                 let ip = IpAddr::from_str(ipmatch.as_str()).map_err(|_| ParsingError)?;
                 let dtime =
@@ -87,7 +87,7 @@ impl LogEntry {
                 // println!("hash {}", hash);
 
                 Ok(LogEntry {
-                    hash: hash,
+                    user_hash: hash,
                     timestamp: dtime,
                     method: method.to_owned(),
                     url: url.to_owned(),
@@ -96,7 +96,7 @@ impl LogEntry {
                     useragent: useragent.to_owned(),
                 })
             } else {
-                // println!("Parsing row failed {}", &line);
+                // println!("Parsing row failed 1 {}", &line);
                 Err(ParsingError)
             }
         } else {
