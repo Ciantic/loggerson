@@ -29,29 +29,26 @@ static COMBINED_LOG_REGEX: Lazy<Regex> = Lazy::new(|| {
     ).unwrap()
 });
 
-#[derive(PartialEq, Eq, Clone, Hash)]
-struct Entry {}
-
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub struct Request {
     method: String,
     url: String,
     status_code: i32,
 }
 
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub struct User {
-    hash: String,
-    useragent: Useragent,
+    hash: Option<String>,
+    useragent: Option<Useragent>,
     // TODO: Country struct
 }
 
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub struct Useragent {
     value: String,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct LogEntry {
     timestamp: i64,
     request: Request,
@@ -114,10 +111,10 @@ impl LogEntry {
                 Ok(LogEntry {
                     timestamp: dtime.timestamp(),
                     user: User {
-                        hash: hash,
-                        useragent: Useragent {
+                        hash: Some(hash),
+                        useragent: Some(Useragent {
                             value: useragent.to_owned(),
-                        },
+                        }),
                     },
                     request: Request {
                         method: method.to_owned(),
@@ -143,8 +140,10 @@ fn main() {
     // e.save(&mut a).unwrap();
     let lines = read_lines(".cache/access_log").unwrap();
 
+    // let par = lines.chunks(100000);
     let par = lines.chunks(100000);
     let mut cache = BatchCache::new();
+    let mut all_entries = 0;
     let stuff =
         par.into_iter()
             .enumerate()
@@ -167,6 +166,8 @@ fn main() {
 
                 // Sort by timestamp
                 entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
+                all_entries += entries.len();
 
                 println!(
                     "Parsed a chunk in {} ms, successes {}, failures {}.",
@@ -193,6 +194,8 @@ fn main() {
             });
 
     stuff.for_each(|r| {});
+
+    println!("All entries {}", all_entries);
 }
 
 // The output is wrapped in a Result to allow matching on errors

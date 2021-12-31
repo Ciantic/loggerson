@@ -32,7 +32,9 @@ CREATE INDEX IF NOT EXISTS requests_cols ON requests(method, url, status_code);
 
 CREATE TABLE IF NOT EXISTS users (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  hash            VARCHAR(32)    NOT NULL UNIQUE,
+
+  -- hash intentionally allows NULL, so you can forget the user hash
+  hash            VARCHAR(64)    UNIQUE,
 
   -- useragent_id intentionally allows NULL, so you can forget the useragent
   useragent_id    INTEGER,

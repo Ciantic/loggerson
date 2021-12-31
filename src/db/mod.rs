@@ -57,11 +57,11 @@ impl BatchCache {
         let requests = reqstmt
             .query_map(params![first, last], |row| {
                 Ok((
-                    row.get::<_, i32>(3).unwrap(),
+                    row.get_unwrap::<_, i32>(0),
                     Request {
-                        method: row.get(1).unwrap(),
-                        url: row.get(2).unwrap(),
-                        status_code: row.get(3).unwrap(),
+                        method: row.get_unwrap(1),
+                        url: row.get_unwrap(2),
+                        status_code: row.get_unwrap(3),
                     },
                 ))
             })
@@ -95,13 +95,13 @@ impl BatchCache {
         let query = reqstmt
             .query_map(params![first, last], |row| {
                 Ok((
-                    row.get::<_, i32>(0).unwrap(),
-                    row.get::<_, i32>(1).unwrap(),
+                    row.get_unwrap::<_, i32>(0),
+                    row.get_unwrap::<_, i32>(1),
                     User {
-                        hash: row.get(2).unwrap(),
-                        useragent: Useragent {
-                            value: row.get(3).unwrap(),
-                        },
+                        hash: Some(row.get_unwrap(2)),
+                        useragent: Some(Useragent {
+                            value: row.get_unwrap(3),
+                        }),
                     },
                 ))
             })
@@ -109,8 +109,10 @@ impl BatchCache {
 
         for row in query {
             if let Ok((user_id, useragent_id, user)) = row {
-                self.useragents_cache
-                    .insert(user.useragent.clone(), useragent_id);
+                if let Some(useragent) = &user.useragent {
+                    self.useragents_cache
+                        .insert(useragent.clone(), useragent_id);
+                }
                 self.users_cache.insert(user, user_id);
             }
         }
@@ -235,13 +237,18 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
             return v.to_owned();
         }
 
-        let useragent_id = self.get_useragent_id(&user.useragent);
+        let useragent_id = match &user.useragent {
+            Some(ua) => Some(self.get_useragent_id(&ua)),
+            None => None,
+        };
+
         let id = self
             .users_stmt
             .query_row(params![&user.hash, &useragent_id], |row| {
                 Ok(row.get_unwrap(0))
             })
             .unwrap();
+
         self.cache.users_cache.insert(key, id);
         id
     }
@@ -249,6 +256,7 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
     fn add(&mut self, entry: &LogEntry) {
         let request_id = self.get_request_id(&entry.request);
         let user_id: i32 = self.get_user_id(&entry.user);
+
         self.entrys_stmt
             .execute(params![&entry.timestamp, &request_id, &user_id])
             .unwrap();
@@ -271,10 +279,11 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
                 &self.cache.useragents_cache.len()
             );
 
+            println!("Add entries {}", entries.len());
             for (n, r) in entries.iter().enumerate() {
-                if n % 1000 == 0 {
-                    println!("Sqlite add calls {}", n);
-                }
+                // if n % 1000 == 0 {
+                //     println!("Sqlite add calls {}", n);
+                // }
                 self.add(&r);
             }
             println!("ADDED A CHUNK");

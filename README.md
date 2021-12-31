@@ -22,3 +22,5 @@ Goals: Idempotent log file reading, small sqlite database.
     like md5 and hashing IP+Useragent in same hash? This means there is
     inifinite amount of collisions (because it's broken has), thus the hash is
     GDPR safe?
+
+-
