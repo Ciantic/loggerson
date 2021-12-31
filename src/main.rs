@@ -105,7 +105,11 @@ impl LogEntry {
                 for &b in hashbytes.as_slice() {
                     write!(&mut hash, "{:02x}", b).unwrap();
                 }
-                // println!("hash {}", hash);
+
+                /*
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&hashbytes);
+                */
 
                 Ok(LogEntry {
                     timestamp: dtime.timestamp(),
