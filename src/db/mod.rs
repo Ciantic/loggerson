@@ -24,6 +24,9 @@ pub fn init(path: &str) -> Result<Pool<SqliteConnectionManager>, rusqlite::Error
     Ok(pool)
 }
 
+// TODO: There is lot's of generic code here, written repetitively, but I
+// haven't yet figured out how to make them more general in Rust.
+
 pub struct BatchCache {
     pub useragents_cache: HashMap<Useragent, i32>,
     pub users_cache: HashMap<User, i32>,
@@ -140,7 +143,9 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
                 "
                 INSERT INTO 
                 requests(method, url, status_code) 
-                VALUES(?, ?, ?) RETURNING id
+                VALUES(?, ?, ?)
+                ON CONFLICT DO UPDATE SET id=id
+                RETURNING id
             ",
             )
             .unwrap();
@@ -150,7 +155,9 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
                 "
                 INSERT INTO 
                 useragents(value) 
-                VALUES(?) RETURNING id
+                VALUES(?) 
+                ON CONFLICT DO UPDATE SET id=id
+                RETURNING id
             ",
             )
             .unwrap();
@@ -160,7 +167,9 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
                 "
                 INSERT INTO
                 users(hash, useragent_id)
-                VALUES(?, ?) RETURNING id
+                VALUES(?, ?) 
+                ON CONFLICT DO UPDATE SET id=id
+                RETURNING id
                 ",
             )
             .unwrap();
