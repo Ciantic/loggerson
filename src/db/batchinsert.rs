@@ -5,12 +5,11 @@ use rusqlite::{Connection, Row, ToSql};
 // struct DumParams<'a, const N: usize>([&'a dyn ToSql; N]);
 // impl<'a, const N: usize> Sealed for DumParams<'a, N> {}
 
-struct BatchInsertQuery<'i, Key, PFun, Fun, Input: 'i, Output, const N: usize>
+struct BatchInsertQuery<Key, PFun, Fun, Input, Output, const N: usize>
 where
     Fun: FnOnce(&Row<'_>) -> rusqlite::Result<(Key, Output)> + Copy,
-    PFun: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
+    for<'i> PFun: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
 {
-    _i: PhantomData<&'i Input>,
     insert_sql: String,
     cache_select_sql: String,
     binder: Box<Fun>,
@@ -18,15 +17,14 @@ where
     cache: HashMap<Input, Key>,
 }
 
-impl<'i, 'a, Key, PFun, Fun, Input: 'i, Output: 'a, const N: usize>
-    BatchInsertQuery<'i, Key, PFun, Fun, Input, Output, N>
+impl<'a, Key, PFun, Fun, Input, Output: 'a, const N: usize>
+    BatchInsertQuery<Key, PFun, Fun, Input, Output, N>
 where
     Fun: FnOnce(&Row<'_>) -> rusqlite::Result<(Key, Output)> + Copy,
-    PFun: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
+    for<'i> PFun: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
 {
     pub fn new(insert_sql: &str, cache_select_sql: &str, params_binder: PFun, binder: Fun) -> Self {
         BatchInsertQuery {
-            _i: PhantomData,
             insert_sql: insert_sql.to_owned(),
             cache_select_sql: cache_select_sql.to_owned(),
             binder: Box::new(binder),
@@ -35,7 +33,7 @@ where
         }
     }
 
-    pub fn insert(self, con: &mut Connection, entries: &'i Vec<&Input>) -> Vec<(Key, Output)> {
+    pub fn insert(self, con: &mut Connection, entries: &Vec<&Input>) -> Vec<(Key, Output)> {
         let tx = con.transaction().unwrap();
         let results = {
             let mut insertor = tx.prepare_cached(&self.insert_sql).unwrap();
