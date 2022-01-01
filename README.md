@@ -4,6 +4,14 @@ It reads your access logs and does something.
 
 Goals: Idempotent log file reading, small sqlite database.
 
+## Queries
+
+All users by duration:
+
+```sql
+select (MAX(timestamp) - MIN(timestamp))/(3600*24) as duration, COUNT(*) as cnt, ua.value from entrys e, users u, useragents ua where e.user_id = u.id AND u.useragent_id = ua.id GROUP BY u.id ORDER BY duration DESC
+```
+
 ## TODO:
 
 -   Ability to clear old user hashes (so they become impossible to reverse even
