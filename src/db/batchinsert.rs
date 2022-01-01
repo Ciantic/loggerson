@@ -41,7 +41,7 @@ where
         }
     }
 
-    pub fn insert(self, con: &mut Connection, entries: &'i Vec<Input>) -> Vec<(Key, Output)> {
+    pub fn insert(self, con: &mut Connection, entries: &'i Vec<&Input>) -> Vec<(Key, Output)> {
         let tx = con.transaction().unwrap();
         let results = {
             let mut insertor = tx.prepare_cached(&self.insert_sql).unwrap();
@@ -106,11 +106,11 @@ mod tests {
         biq.insert(
             &mut c,
             &vec![
-                Person {
+                &Person {
                     name: "John".to_owned(),
                     address: "Kukkaiskuja 123".to_owned(),
                 },
-                Person {
+                &Person {
                     name: "Mary".to_owned(),
                     address: "Homestreet 123".to_owned(),
                 },
