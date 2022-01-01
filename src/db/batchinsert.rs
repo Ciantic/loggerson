@@ -1,15 +1,18 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use rusqlite::{Connection, Params, Row, Statement};
+use rusqlite::{Connection, Row, ToSql};
 
-struct BatchInsertQuery<'a, Key, P, PFun, Fun, Input, Output: 'a>
+// struct DumParams<'a, const N: usize>([&'a dyn ToSql; N]);
+// impl<'a, const N: usize> Sealed for DumParams<'a, N> {}
+
+struct BatchInsertQuery<'i, 'a, Key, PFun, Fun, Input: 'i, Output: 'a, const N: usize>
 where
     Fun: FnOnce(&Row<'_>) -> rusqlite::Result<(Key, Output)> + Copy,
-    PFun: (FnOnce(&Input) -> P) + Copy,
-    P: Params,
+    PFun: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
 {
     _t: PhantomData<Input>,
     _f: &'a PhantomData<i32>,
+    _i: &'i PhantomData<i32>,
     _f2: PhantomData<PFun>,
     insert_sql: String,
     cache_select_sql: String,
@@ -18,17 +21,17 @@ where
     cache: HashMap<Input, Key>,
 }
 
-impl<'a, Key, P, PFun, Fun, Input, Output: 'a>
-    BatchInsertQuery<'a, Key, P, PFun, Fun, Input, Output>
+impl<'i, 'a, Key, PFun, Fun, Input: 'i, Output: 'a, const N: usize>
+    BatchInsertQuery<'i, 'a, Key, PFun, Fun, Input, Output, N>
 where
     Fun: FnOnce(&Row<'_>) -> rusqlite::Result<(Key, Output)> + Copy,
-    PFun: (FnOnce(&Input) -> P) + Copy,
-    P: Params,
+    PFun: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
 {
     pub fn new(insert_sql: &str, cache_select_sql: &str, params_binder: PFun, binder: Fun) -> Self {
         BatchInsertQuery {
             _t: PhantomData,
             _f: &PhantomData,
+            _i: &PhantomData,
             _f2: PhantomData,
             insert_sql: insert_sql.to_owned(),
             cache_select_sql: cache_select_sql.to_owned(),
@@ -38,65 +41,100 @@ where
         }
     }
 
-    pub fn insert(self, mut con: Connection, entries: &Vec<Input>) -> Vec<(Key, Output)> {
+    pub fn insert(self, con: &mut Connection, entries: &'i Vec<Input>) -> Vec<(Key, Output)> {
         let tx = con.transaction().unwrap();
-        let mut insertor = tx.prepare_cached(&self.insert_sql).unwrap();
-        // let cacher = tx.prepare_cached(&self.cache_select_sql).unwrap();
+        let results = {
+            let mut insertor = tx.prepare_cached(&self.insert_sql).unwrap();
 
-        entries
-            .iter()
-            .map(|i| {
-                let o = insertor
-                    .query_row(self.params_binder.as_ref()(i), |row| {
-                        self.binder.as_ref()(row)
-                    })
-                    .unwrap();
+            entries
+                .iter()
+                .map(|i| {
+                    let p = self.params_binder.as_ref()(i);
 
-                o
-                // let (key, value) = self.binder.as_ref()(todo!(), i);
-                // value
-            })
-            .collect()
+                    // I can't use query_row, query_map or query directly, because of this:
+                    // https://github.com/rusqlite/rusqlite/issues/1068
+                    //
+                    // Instead I call raw bind param manually
+
+                    for (index, v) in p.into_iter().enumerate() {
+                        insertor.raw_bind_parameter(index + 1, v).unwrap();
+                    }
+                    let mut rows = insertor.raw_query();
+                    let row = rows.next().unwrap().unwrap();
+                    let key_output = self.binder.as_ref()(row).unwrap();
+                    key_output
+                })
+                .collect()
+        };
+        tx.commit().unwrap();
+        results
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rusqlite::{params, Connection};
+    use rusqlite::Connection;
 
     use crate::db::batchinsert::BatchInsertQuery;
 
     #[test]
     fn it_works() {
-        let c = Connection::open_in_memory().unwrap();
+        struct Person {
+            name: String,
+            address: String,
+        }
+
+        let mut c = Connection::open_in_memory().unwrap();
         c.execute_batch(
             "
         CREATE TABLE people (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT
+            name TEXT,
+            address TEXT
         );
         ",
         )
         .unwrap();
 
         let biq = BatchInsertQuery::new(
-            "INSERT INTO people (name) VALUES (?) RETURNING id",
+            "INSERT INTO people (name, address) VALUES (?, ?) RETURNING id",
             "Doo",
-            |input: &String| [input.to_owned()], // TODO: This to_owned is not wanted!
-            // |input| params![input],
+            |input: &Person| [&input.name, &input.address],
             |row| Ok((row.get_unwrap::<_, i32>(0), ())),
         );
 
         biq.insert(
-            c,
+            &mut c,
             &vec![
-                "John".to_owned(),
-                "Mary".to_owned(),
-                "Test".to_owned(),
-                "Doe".to_owned(),
+                Person {
+                    name: "John".to_owned(),
+                    address: "Kukkaiskuja 123".to_owned(),
+                },
+                Person {
+                    name: "Mary".to_owned(),
+                    address: "Homestreet 123".to_owned(),
+                },
             ],
         );
-        // biq.insert(&vec![1, 2, 3]);
-        assert_eq!(2 + 2, 4);
+
+        let mut stmt = c.prepare(&"SELECT * FROM people").unwrap();
+        let results = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i32>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results,
+            vec![
+                (1, "John".to_owned(), "Kukkaiskuja 123".to_owned()),
+                (2, "Mary".to_owned(), "Homestreet 123".to_owned()),
+            ]
+        );
     }
 }
