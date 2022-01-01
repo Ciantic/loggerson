@@ -6,6 +6,8 @@ use rusqlite::{params, CachedStatement, Connection, Transaction};
 
 use crate::{LogEntry, Request, User, Useragent};
 
+mod batchinsert;
+
 const SCHEMA: &str = include_str!("schema.sql");
 
 fn create_schema(conn: &PooledConnection<SqliteConnectionManager>) -> Result<(), rusqlite::Error> {

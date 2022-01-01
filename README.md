@@ -2,7 +2,7 @@
 
 It reads your access logs and does something.
 
-Goals: Idempotent log file reading, small sqlite database.
+Goals: Idempotent log file reading and writing, small sqlite database.
 
 ## Queries
 
@@ -16,6 +16,10 @@ select (MAX(timestamp) - MIN(timestamp))/(3600*24) as duration, COUNT(*) as cnt,
 
 -   Ability to clear old user hashes (so they become impossible to reverse even
     in theory)
+
+-   On subsequent call with same file, it should ignore rows which has same
+    timestamp, user and URL. However if the user hash is made to NULL, it should
+    ignore it regardless.
 
 ## Notes:
 
