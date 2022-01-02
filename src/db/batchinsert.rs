@@ -1,38 +1,38 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use rusqlite::{Connection, Row, ToSql};
+use rusqlite::{Connection, Params, Row, Statement, ToSql};
 
-struct BatchInsertQuery<Input, Key, FnInputToParams, FnRowToKey, const N: usize>
+struct BatchInsertQuery<Input, Key, FnInsertInputToParams, FnInsertRowToKey, const N: usize>
 where
-    FnRowToKey: FnOnce(&Row<'_>) -> rusqlite::Result<Key> + Copy,
-    for<'i> FnInputToParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
+    FnInsertRowToKey: FnOnce(Option<&Row<'_>>) -> rusqlite::Result<Key> + Copy,
+    for<'i> FnInsertInputToParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
 {
     insert_sql: String,
     cache_select_sql: String,
-    binder: Box<FnRowToKey>,
-    params_binder: Box<FnInputToParams>,
+    insert_row_to_key: Box<FnInsertRowToKey>,
+    insert_params: Box<FnInsertInputToParams>,
     cache: HashMap<Input, Key>,
 }
 
-impl<Input, Key, FnInputToParams, FnRowToKey, const N: usize>
-    BatchInsertQuery<Input, Key, FnInputToParams, FnRowToKey, N>
+impl<Input, Key, FnInsertInputToParams, FnInsertRowToKey, const N: usize>
+    BatchInsertQuery<Input, Key, FnInsertInputToParams, FnInsertRowToKey, N>
 where
-    FnRowToKey: FnOnce(&Row<'_>) -> rusqlite::Result<Key> + Copy,
-    for<'i> FnInputToParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
+    FnInsertRowToKey: FnOnce(Option<&Row<'_>>) -> rusqlite::Result<Key> + Copy,
+    for<'i> FnInsertInputToParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
     Input: Eq + std::hash::Hash + Clone,
     Key: Clone, // Or is Copy better?
 {
     pub fn new(
         insert_sql: &str,
+        insert_params: FnInsertInputToParams,
+        insert_row_to_key: FnInsertRowToKey,
         cache_select_sql: &str,
-        params_binder: FnInputToParams,
-        binder: FnRowToKey,
     ) -> Self {
         BatchInsertQuery {
             insert_sql: insert_sql.to_owned(),
+            insert_row_to_key: Box::new(insert_row_to_key),
+            insert_params: Box::new(insert_params),
             cache_select_sql: cache_select_sql.to_owned(),
-            binder: Box::new(binder),
-            params_binder: Box::new(params_binder),
             cache: HashMap::new(),
         }
     }
@@ -53,6 +53,7 @@ where
 
             entries
                 .iter()
+                .copied()
                 .map(|i| {
                     if let Some(cached_value) = self.cache.get(i) {
                         return cached_value.clone();
@@ -62,13 +63,13 @@ where
                     // https://github.com/rusqlite/rusqlite/issues/1068
                     //
                     // Instead I call raw bind param manually
-                    let p = self.params_binder.as_ref()(i);
+                    let p = self.insert_params.as_ref()(i);
                     for (index, v) in p.into_iter().enumerate() {
                         insertor.raw_bind_parameter(index + 1, v).unwrap();
                     }
                     let mut rows = insertor.raw_query();
-                    let row = rows.next().unwrap().unwrap();
-                    let key = self.binder.as_ref()(row).unwrap();
+                    let row = rows.next().unwrap();
+                    let key = self.insert_row_to_key.as_ref()(row).unwrap();
                     self.cache.insert(i.to_owned().to_owned(), key.to_owned());
                     key
                 })
@@ -107,9 +108,9 @@ mod tests {
 
         let mut biq = BatchInsertQuery::new(
             "INSERT INTO people (name, address) VALUES (?, ?) RETURNING id",
-            "Doo",
             |input: &Person| [&input.name, &input.address],
-            |row| Ok(row.get_unwrap::<_, i32>(0)),
+            |row| Ok(row.unwrap().get::<_, i32>(0)?),
+            "SELECT id, name, address FROM people WHERE name != ?",
         );
 
         biq.insert(

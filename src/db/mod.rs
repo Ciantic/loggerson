@@ -7,6 +7,7 @@ use rusqlite::{params, CachedStatement, Connection, Transaction};
 use crate::{LogEntry, Request, User, Useragent};
 
 mod batchinsert;
+mod batchquery;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
