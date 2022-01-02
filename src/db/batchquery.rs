@@ -28,27 +28,25 @@ where
         }
     }
 
-    pub fn query<'a, O, I>(&mut self, con: &Connection, entries: I) -> rusqlite::Result<O>
+    pub fn query<O, I>(&mut self, con: &Connection, entries: I) -> rusqlite::Result<O>
     where
         I: IntoIterator<Item = &'i Input>,
-        O: FromIterator<(&'i Input, Value)>,
+        O: FromIterator<Value>,
     {
         let mut stmt = con.prepare_cached(&self.sql)?;
-        let results = entries
-            .into_iter()
-            .map(|input| -> rusqlite::Result<(&Input, Value)> {
-                // I can't use query_row, query_map or query directly, because of this:
-                // https://github.com/rusqlite/rusqlite/issues/1068
-                //
-                // Instead I call raw bind param manually
-                let p = self.bind_params.as_ref()(input);
-                for (index, v) in p.into_iter().enumerate() {
-                    stmt.raw_bind_parameter(index + 1, v).unwrap();
-                }
-                let rows = stmt.raw_query();
-                let key = self.row_to_key.as_ref()(rows)?;
-                Ok((input, key))
-            });
+        let results = entries.into_iter().map(|input| -> rusqlite::Result<_> {
+            // I can't use query_row, query_map or query directly, because of this:
+            // https://github.com/rusqlite/rusqlite/issues/1068
+            //
+            // Instead I call raw bind param manually
+            let p = self.bind_params.as_ref()(input);
+            for (index, v) in p.into_iter().enumerate() {
+                stmt.raw_bind_parameter(index + 1, v).unwrap();
+            }
+            let rows = stmt.raw_query();
+            let key = self.row_to_key.as_ref()(rows)?;
+            Ok(key)
+        });
 
         Result::from_iter(results)
     }
@@ -82,22 +80,7 @@ mod tests {
         )
         .unwrap();
 
-        // let mut tx = &mut c.transaction().unwrap();
-        let persons = vec![
-            Person {
-                name: "John".to_owned(),
-                address: "Kukkaiskuja 123".to_owned(),
-            },
-            Person {
-                name: "Mary".to_owned(),
-                address: "Homestreet 123".to_owned(),
-            },
-            Person {
-                name: "Mary".to_owned(),
-                address: "Homestreet 123".to_owned(),
-            },
-        ];
-        let _ids: Vec<_> = BatchQuery::new(
+        let ids: Vec<_> = BatchQuery::new(
             "INSERT INTO people (name, address) VALUES (?, ?) RETURNING id",
             |input: &Person| [&input.name, &input.address],
             |mut rows| {
@@ -105,10 +88,27 @@ mod tests {
                 Ok(row.get::<_, i32>(0)?)
             },
         )
-        .query(&c, persons.as_slice())
+        .query(
+            &c,
+            vec![
+                Person {
+                    name: "John".to_owned(),
+                    address: "Kukkaiskuja 123".to_owned(),
+                },
+                Person {
+                    name: "Mary".to_owned(),
+                    address: "Homestreet 123".to_owned(),
+                },
+                Person {
+                    name: "Mary".to_owned(),
+                    address: "Homestreet 123".to_owned(),
+                },
+            ]
+            .as_slice(),
+        )
         .unwrap();
 
-        assert_eq!(_ids.iter().map(|f| f.1).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(ids.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
 
         let mut stmt = c.prepare(&"SELECT * FROM people").unwrap();
         let results = stmt
