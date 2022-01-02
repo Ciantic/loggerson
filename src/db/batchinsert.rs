@@ -17,7 +17,7 @@ where
     cache: HashMap<Input, (Key, Output)>,
 }
 
-impl<'a, Key, PFun, Fun, Input, Output: 'a, const N: usize>
+impl<Key, PFun, Fun, Input, Output, const N: usize>
     BatchInsertQuery<Key, PFun, Fun, Input, Output, N>
 where
     Fun: FnOnce(&Row<'_>) -> rusqlite::Result<(Key, Output)> + Copy,
@@ -37,6 +37,8 @@ where
     }
 
     pub fn insert(&mut self, con: &mut Connection, entries: &Vec<&Input>) -> Vec<(Key, Output)> {
+        // TODO: Proper Result return type
+
         let tx = con.transaction().unwrap();
         let results = {
             let mut insertor = tx.prepare_cached(&self.insert_sql).unwrap();
