@@ -14,7 +14,7 @@ where
     cache_select_sql: String,
     binder: Box<Fun>,
     params_binder: Box<PFun>,
-    cache: HashMap<Input, Key>,
+    cache: HashMap<Input, (Key, Output)>,
 }
 
 impl<'a, Key, PFun, Fun, Input, Output: 'a, const N: usize>
@@ -22,6 +22,9 @@ impl<'a, Key, PFun, Fun, Input, Output: 'a, const N: usize>
 where
     Fun: FnOnce(&Row<'_>) -> rusqlite::Result<(Key, Output)> + Copy,
     for<'i> PFun: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
+    Input: Eq + std::hash::Hash + Clone,
+    Output: Eq + std::hash::Hash + Clone,
+    Key: Clone, // Or is Copy better?
 {
     pub fn new(insert_sql: &str, cache_select_sql: &str, params_binder: PFun, binder: Fun) -> Self {
         BatchInsertQuery {
@@ -33,7 +36,7 @@ where
         }
     }
 
-    pub fn insert(self, con: &mut Connection, entries: &Vec<&Input>) -> Vec<(Key, Output)> {
+    pub fn insert(&mut self, con: &mut Connection, entries: &Vec<&Input>) -> Vec<(Key, Output)> {
         let tx = con.transaction().unwrap();
         let results = {
             let mut insertor = tx.prepare_cached(&self.insert_sql).unwrap();
@@ -41,20 +44,23 @@ where
             entries
                 .iter()
                 .map(|i| {
-                    let p = self.params_binder.as_ref()(i);
+                    if let Some(cached_value) = self.cache.get(i) {
+                        return cached_value.clone();
+                    }
 
                     // I can't use query_row, query_map or query directly, because of this:
                     // https://github.com/rusqlite/rusqlite/issues/1068
                     //
                     // Instead I call raw bind param manually
-
+                    let p = self.params_binder.as_ref()(i);
                     for (index, v) in p.into_iter().enumerate() {
                         insertor.raw_bind_parameter(index + 1, v).unwrap();
                     }
                     let mut rows = insertor.raw_query();
                     let row = rows.next().unwrap().unwrap();
                     let (key, output) = self.binder.as_ref()(row).unwrap();
-                    // self.cache.insert(k, v);
+                    self.cache
+                        .insert(i.to_owned().to_owned(), (key.to_owned(), output.to_owned()));
                     (key, output)
                 })
                 .collect()
@@ -72,6 +78,7 @@ mod tests {
 
     #[test]
     fn it_works() {
+        #[derive(PartialEq, Eq, Hash, Clone)]
         struct Person {
             name: String,
             address: String,
@@ -89,7 +96,7 @@ mod tests {
         )
         .unwrap();
 
-        let biq = BatchInsertQuery::new(
+        let mut biq = BatchInsertQuery::new(
             "INSERT INTO people (name, address) VALUES (?, ?) RETURNING id",
             "Doo",
             |input: &Person| [&input.name, &input.address],
@@ -103,6 +110,11 @@ mod tests {
                     name: "John".to_owned(),
                     address: "Kukkaiskuja 123".to_owned(),
                 },
+                &Person {
+                    name: "Mary".to_owned(),
+                    address: "Homestreet 123".to_owned(),
+                },
+                // This is not inserted, as it's already cached
                 &Person {
                     name: "Mary".to_owned(),
                     address: "Homestreet 123".to_owned(),
