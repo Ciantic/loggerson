@@ -56,6 +56,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Borrow;
+
     use rusqlite::Connection;
 
     use super::BatchQuery;
@@ -81,7 +83,21 @@ mod tests {
         .unwrap();
 
         // let mut tx = &mut c.transaction().unwrap();
-        let ids: Vec<_> = BatchQuery::new(
+        let persons = vec![
+            Person {
+                name: "John".to_owned(),
+                address: "Kukkaiskuja 123".to_owned(),
+            },
+            Person {
+                name: "Mary".to_owned(),
+                address: "Homestreet 123".to_owned(),
+            },
+            Person {
+                name: "Mary".to_owned(),
+                address: "Homestreet 123".to_owned(),
+            },
+        ];
+        let _ids: Vec<_> = BatchQuery::new(
             "INSERT INTO people (name, address) VALUES (?, ?) RETURNING id",
             |input: &Person| [&input.name, &input.address],
             |mut rows| {
@@ -89,24 +105,10 @@ mod tests {
                 Ok(row.get::<_, i32>(0)?)
             },
         )
-        .query(
-            &c,
-            vec![
-                &Person {
-                    name: "John".to_owned(),
-                    address: "Kukkaiskuja 123".to_owned(),
-                },
-                &Person {
-                    name: "Mary".to_owned(),
-                    address: "Homestreet 123".to_owned(),
-                },
-                &Person {
-                    name: "Mary".to_owned(),
-                    address: "Homestreet 123".to_owned(),
-                },
-            ],
-        )
+        .query(&c, persons.as_slice())
         .unwrap();
+
+        assert_eq!(_ids.iter().map(|f| f.1).collect::<Vec<_>>(), vec![1, 2, 3]);
 
         let mut stmt = c.prepare(&"SELECT * FROM people").unwrap();
         let results = stmt
