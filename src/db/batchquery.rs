@@ -35,10 +35,6 @@ where
     {
         let mut stmt = con.prepare_cached(&self.sql)?;
         let results = entries.into_iter().map(|input| -> rusqlite::Result<_> {
-            // I can't use query_row, query_map or query directly, because of this:
-            // https://github.com/rusqlite/rusqlite/issues/1068
-            //
-            // Instead I call raw bind param manually
             let p = self.bind_params.as_ref()(input);
             for (index, v) in p.into_iter().enumerate() {
                 stmt.raw_bind_parameter(index + 1, v).unwrap();
