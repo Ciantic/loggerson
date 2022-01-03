@@ -17,6 +17,33 @@ pub trait BatchQueryable<'i, Input: 'i, Value> {
         I: IntoIterator<Item = &'i Input>;
 }
 
+pub struct BatchQuery<Input, Value, FnBindParams, FnMapRow, const N: usize>
+where
+    FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
+    for<'i> FnBindParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
+{
+    _i: PhantomData<Input>,
+    sql: String,
+    row_to_value: Box<FnMapRow>,
+    bind_params: Box<FnBindParams>,
+}
+
+impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize>
+    BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
+where
+    FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
+    for<'a> FnBindParams: (FnOnce(&'a Input) -> [&'a dyn ToSql; N]) + Copy,
+{
+    pub fn new(insert_sql: &str, bind_params: FnBindParams, row_to_value: FnMapRow) -> Self {
+        BatchQuery {
+            _i: PhantomData,
+            sql: insert_sql.to_owned(),
+            row_to_value: Box::new(row_to_value),
+            bind_params: Box::new(bind_params),
+        }
+    }
+}
+
 impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize> BatchQueryable<'i, Input, Value>
     for BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
 where
@@ -55,32 +82,6 @@ where
         let v = self.query::<Vec<_>, _>(&tx, entries)?;
         tx.commit()?;
         Ok(v)
-    }
-}
-
-pub struct BatchQuery<Input, Value, FnBindParams, FnMapRow, const N: usize>
-where
-    FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
-    for<'i> FnBindParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
-{
-    _i: PhantomData<Input>,
-    sql: String,
-    row_to_value: Box<FnMapRow>,
-    bind_params: Box<FnBindParams>,
-}
-impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize>
-    BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
-where
-    FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
-    for<'a> FnBindParams: (FnOnce(&'a Input) -> [&'a dyn ToSql; N]) + Copy,
-{
-    pub fn new(insert_sql: &str, bind_params: FnBindParams, row_to_value: FnMapRow) -> Self {
-        BatchQuery {
-            _i: PhantomData,
-            sql: insert_sql.to_owned(),
-            row_to_value: Box::new(row_to_value),
-            bind_params: Box::new(bind_params),
-        }
     }
 }
 
