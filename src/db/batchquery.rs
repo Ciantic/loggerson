@@ -2,33 +2,28 @@ use std::marker::PhantomData;
 
 use rusqlite::{Connection, Rows, ToSql, Transaction};
 
-struct BatchQuery<Input, Value, FnBindParams, FnMapRow, const N: usize>
-where
-    FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
-    for<'i> FnBindParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
-{
-    _i: PhantomData<Input>,
-    sql: String,
-    row_to_value: Box<FnMapRow>,
-    bind_params: Box<FnBindParams>,
+pub trait BatchQueryable<'i, Input: 'i, Value> {
+    fn query<O, I>(&self, con: &Connection, entries: I) -> rusqlite::Result<O>
+    where
+        I: IntoIterator<Item = &'i Input>,
+        O: FromIterator<Value>;
+
+    fn query_with_transaction<I>(
+        &self,
+        con: &mut Connection,
+        entries: I,
+    ) -> rusqlite::Result<Vec<Value>>
+    where
+        I: IntoIterator<Item = &'i Input>;
 }
 
-impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize>
-    BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
+impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize> BatchQueryable<'i, Input, Value>
+    for BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
 where
     FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
     for<'a> FnBindParams: (FnOnce(&'a Input) -> [&'a dyn ToSql; N]) + Copy,
 {
-    pub fn new(insert_sql: &str, bind_params: FnBindParams, row_to_value: FnMapRow) -> Self {
-        BatchQuery {
-            _i: PhantomData,
-            sql: insert_sql.to_owned(),
-            row_to_value: Box::new(row_to_value),
-            bind_params: Box::new(bind_params),
-        }
-    }
-
-    pub fn query<O, I>(&mut self, con: &Connection, entries: I) -> rusqlite::Result<O>
+    fn query<O, I>(&self, con: &Connection, entries: I) -> rusqlite::Result<O>
     where
         I: IntoIterator<Item = &'i Input>,
         O: FromIterator<Value>,
@@ -47,8 +42,8 @@ where
         Result::from_iter(results)
     }
 
-    pub fn query_with_transaction<I>(
-        &mut self,
+    fn query_with_transaction<I>(
+        &self,
         con: &mut Connection,
         entries: I,
     ) -> rusqlite::Result<Vec<Value>>
@@ -63,11 +58,39 @@ where
     }
 }
 
+pub struct BatchQuery<Input, Value, FnBindParams, FnMapRow, const N: usize>
+where
+    FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
+    for<'i> FnBindParams: (FnOnce(&'i Input) -> [&'i dyn ToSql; N]) + Copy,
+{
+    _i: PhantomData<Input>,
+    sql: String,
+    row_to_value: Box<FnMapRow>,
+    bind_params: Box<FnBindParams>,
+}
+impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize>
+    BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
+where
+    FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
+    for<'a> FnBindParams: (FnOnce(&'a Input) -> [&'a dyn ToSql; N]) + Copy,
+{
+    pub fn new(insert_sql: &str, bind_params: FnBindParams, row_to_value: FnMapRow) -> Self {
+        BatchQuery {
+            _i: PhantomData,
+            sql: insert_sql.to_owned(),
+            row_to_value: Box::new(row_to_value),
+            bind_params: Box::new(bind_params),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Borrow;
 
     use rusqlite::Connection;
+
+    use crate::db::batchquery::BatchQueryable;
 
     use super::BatchQuery;
 

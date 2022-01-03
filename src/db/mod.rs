@@ -6,6 +6,9 @@ use rusqlite::{params, CachedStatement, Connection, Transaction};
 
 use crate::{LogEntry, Request, User, Useragent};
 
+use self::batchquery::BatchQueryable;
+
+mod batchcachequery;
 mod batchinsert;
 mod batchquery;
 
