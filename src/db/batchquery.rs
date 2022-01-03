@@ -9,7 +9,7 @@ where
 {
     _i: PhantomData<Input>,
     sql: String,
-    row_to_key: Box<FnMapRow>,
+    row_to_value: Box<FnMapRow>,
     bind_params: Box<FnBindParams>,
 }
 
@@ -19,11 +19,11 @@ where
     FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
     for<'a> FnBindParams: (FnOnce(&'a Input) -> [&'a dyn ToSql; N]) + Copy,
 {
-    pub fn new(insert_sql: &str, bind_params: FnBindParams, row_to_key: FnMapRow) -> Self {
+    pub fn new(insert_sql: &str, bind_params: FnBindParams, row_to_value: FnMapRow) -> Self {
         BatchQuery {
             _i: PhantomData,
             sql: insert_sql.to_owned(),
-            row_to_key: Box::new(row_to_key),
+            row_to_value: Box::new(row_to_value),
             bind_params: Box::new(bind_params),
         }
     }
@@ -44,7 +44,7 @@ where
                 stmt.raw_bind_parameter(index + 1, v).unwrap();
             }
             let rows = stmt.raw_query();
-            let key = self.row_to_key.as_ref()(rows)?;
+            let key = self.row_to_value.as_ref()(rows)?;
             Ok(key)
         });
 
