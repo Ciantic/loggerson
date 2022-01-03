@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use rusqlite::{Connection, Rows, ToSql};
+use rusqlite::{Connection, Rows, ToSql, Transaction};
 
 struct BatchQuery<Input, Value, FnBindParams, FnMapRow, const N: usize>
 where
@@ -50,6 +50,21 @@ where
 
         Result::from_iter(results)
     }
+
+    pub fn query_with_transaction<I>(
+        &mut self,
+        con: &mut Connection,
+        entries: I,
+    ) -> rusqlite::Result<Vec<Value>>
+    where
+        I: IntoIterator<Item = &'i Input>,
+    {
+        // In order to commit the transaction, values need to be collected
+        let tx = con.transaction()?;
+        let v = self.query::<Vec<_>, _>(&tx, entries)?;
+        tx.commit()?;
+        Ok(v)
+    }
 }
 
 #[cfg(test)]
@@ -68,7 +83,7 @@ mod tests {
             address: String,
         }
 
-        let c = Connection::open_in_memory().unwrap();
+        let mut c = Connection::open_in_memory().unwrap();
         c.execute_batch(
             "
             CREATE TABLE people (
@@ -80,7 +95,7 @@ mod tests {
         )
         .unwrap();
 
-        let ids: Vec<_> = BatchQuery::new(
+        let ids = BatchQuery::new(
             "INSERT INTO people (name, address) VALUES (?, ?) RETURNING id",
             |input: &Person| [&input.name, &input.address],
             |mut rows| {
@@ -88,8 +103,8 @@ mod tests {
                 Ok(row.get::<_, i32>(0)?)
             },
         )
-        .query(
-            &c,
+        .query_with_transaction(
+            &mut c,
             vec![
                 Person {
                     name: "John".to_owned(),
