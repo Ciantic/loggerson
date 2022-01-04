@@ -1,11 +1,11 @@
-use std::marker::PhantomData;
+use rusqlite::{Connection, Rows, ToSql};
+use std::{borrow::Borrow, marker::PhantomData};
 
-use rusqlite::{Connection, Rows, ToSql, Transaction};
-
-pub trait BatchQueryable<'i, Input: 'i, Value> {
+pub trait BatchQueryable<Input, Value> {
     fn query<O, I>(&self, con: &Connection, entries: I) -> rusqlite::Result<O>
     where
-        I: IntoIterator<Item = &'i Input>,
+        I: IntoIterator,
+        I::Item: Borrow<Input>,
         O: FromIterator<Value>;
 
     fn query_with_transaction<I>(
@@ -14,7 +14,8 @@ pub trait BatchQueryable<'i, Input: 'i, Value> {
         entries: I,
     ) -> rusqlite::Result<Vec<Value>>
     where
-        I: IntoIterator<Item = &'i Input>;
+        I: IntoIterator,
+        I::Item: Borrow<Input>;
 }
 
 pub struct BatchQuery<Input, Value, FnBindParams, FnMapRow, const N: usize>
@@ -28,7 +29,7 @@ where
     bind_params: Box<FnBindParams>,
 }
 
-impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize>
+impl<Input, Value, FnBindParams, FnMapRow, const N: usize>
     BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
 where
     FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
@@ -44,7 +45,7 @@ where
     }
 }
 
-impl<'i, Input: 'i, Value, FnBindParams, FnMapRow, const N: usize> BatchQueryable<'i, Input, Value>
+impl<Input, Value, FnBindParams, FnMapRow, const N: usize> BatchQueryable<Input, Value>
     for BatchQuery<Input, Value, FnBindParams, FnMapRow, N>
 where
     FnMapRow: FnOnce(Rows) -> rusqlite::Result<Value> + Copy,
@@ -52,12 +53,13 @@ where
 {
     fn query<O, I>(&self, con: &Connection, entries: I) -> rusqlite::Result<O>
     where
-        I: IntoIterator<Item = &'i Input>,
+        I: IntoIterator,
+        I::Item: Borrow<Input>,
         O: FromIterator<Value>,
     {
         let mut stmt = con.prepare_cached(&self.sql)?;
         let results = entries.into_iter().map(|input| -> rusqlite::Result<_> {
-            let p = self.bind_params.as_ref()(input);
+            let p = self.bind_params.as_ref()(input.borrow());
             for (index, v) in p.into_iter().enumerate() {
                 stmt.raw_bind_parameter(index + 1, v).unwrap();
             }
@@ -75,7 +77,8 @@ where
         entries: I,
     ) -> rusqlite::Result<Vec<Value>>
     where
-        I: IntoIterator<Item = &'i Input>,
+        I: IntoIterator,
+        I::Item: Borrow<Input>,
     {
         // In order to commit the transaction, values need to be collected
         let tx = con.transaction()?;
@@ -87,13 +90,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Borrow;
-
-    use rusqlite::Connection;
-
-    use crate::db::batchquery::BatchQueryable;
-
     use super::BatchQuery;
+    use crate::db::batchquery::BatchQueryable;
+    use rusqlite::Connection;
 
     #[test]
     fn it_works() {
