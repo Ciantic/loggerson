@@ -6,11 +6,13 @@ use rusqlite::{params, CachedStatement, Connection, Transaction};
 
 use crate::{LogEntry, Request, User, Useragent};
 
-use self::batchquery::BatchQueryable;
+use self::{batchquery::BatchQuery, batchqueryableboxable::BatchQueryableBoxable};
 
 mod batchcachequery;
 mod batchinsert;
 mod batchquery;
+mod batchqueryable;
+mod batchqueryableboxable;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -295,4 +297,47 @@ impl<'conn, 'cache> BatchInsertor<'conn, 'cache> {
             println!("ADDED A CHUNK");
         }
     }
+}
+
+pub struct BatchInsertor5 {
+    // requests: Box<dyn BatchQueryableBoxable<User, i32>>,
+    // users: Box<dyn BatchQueryableBoxable<User, i32>>,
+    useragents: Box<dyn BatchQueryableBoxable<Useragent, i32>>,
+    entrys: Box<dyn BatchQueryableBoxable<LogEntry, i32>>,
+}
+
+fn operate(con: &Connection, entrys: Box<dyn BatchQueryableBoxable<Useragent, i32>>) {
+    let entries = vec![Useragent {
+        value: "Foo".to_owned(),
+    }];
+    let iter = entries.into_iter();
+    let a = BatchInsertor5 {
+        useragents: Box::new(BatchQuery::new(
+            "
+                INSERT INTO
+                useragents (value)
+                VALUES (?)
+                ON CONFLICT UPDATE SET Id = Id 
+                RETURNING 1
+            ",
+            |r: &Useragent| [&r.value],
+            |mut rows| {
+                let row = rows.next()?.unwrap();
+                Ok(row.get::<_, i32>(0)?)
+            },
+        )),
+        entrys: Box::new(BatchQuery::new(
+            "
+                INSERT INTO
+                entrys(timestamp, request_id, user_id)
+                VALUES(?, ?, ?)
+                ON CONFLICT DO NOTHING
+            ",
+            |r: &LogEntry| [&r.timestamp, &1, &2],
+            |mut rows| {
+                let row = rows.next()?.unwrap();
+                Ok(row.get::<_, i32>(0)?)
+            },
+        )),
+    };
 }
