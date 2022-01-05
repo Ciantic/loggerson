@@ -21,6 +21,7 @@ fn main() {
     let lines = read_lines(".cache/access_log").unwrap();
     let par = lines.chunks(100000);
 
+    let (error_sender, error_receiver) = std::sync::mpsc::channel();
     let mut cache = BatchCache::new();
     let mut all_entries = 0;
     let stuff =
@@ -65,7 +66,7 @@ fn main() {
                 let mut conn = conpool.get().unwrap();
                 let tx = conn.transaction().unwrap();
                 {
-                    batch_insert(&tx, &entries, &mut cache).unwrap();
+                    batch_insert(&error_sender, &tx, &entries, &mut cache).unwrap();
                 }
                 tx.commit().unwrap();
                 Ok(())

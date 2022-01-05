@@ -1,5 +1,5 @@
 use crate::{
-    iterutils::{ExtendTo, TransmitErrors},
+    iterutils::{ExtendTo, TransmitErrorsExt},
     models::{LogEntry, Request, User, Useragent},
 };
 use r2d2::{Pool, PooledConnection};
@@ -38,6 +38,7 @@ impl BatchCache {
 }
 
 pub fn batch_insert(
+    error_channel: &std::sync::mpsc::Sender<rusqlite::Error>,
     con: &Connection,
     entries: &Vec<LogEntry>,
     caches: &mut BatchCache,
@@ -67,7 +68,7 @@ pub fn batch_insert(
                     row.get::<_, i32>(0)?,
                 ))
             })
-            .transmit_errors(15)
+            .transmit_errors(&error_channel)
             .extend_to(&mut caches.requests_cache);
     }
 
@@ -97,7 +98,7 @@ pub fn batch_insert(
                     row.get::<_, i32>(0)?,
                 ))
             })
-            .transmit_errors(15)
+            .transmit_errors(&error_channel)
             .extend_to(&mut caches.users_cache);
     }
 

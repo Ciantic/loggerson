@@ -1,36 +1,69 @@
-use std::iter::FilterMap;
+use std::{iter::FilterMap, marker::PhantomData};
 
-pub trait TransmitErrors<T, V, E>
-where
-    T: Iterator<Item = Result<V, E>>,
-{
-    /// Transmit errors to a channel, leaving Ok values in the iterator
-    fn transmit_errors(self, channel: i32) -> FilterMap<T, fn(Result<V, E>) -> Option<V>>;
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+#[derive(Clone)]
+pub struct TransmitErrors<'s, I, E, T> {
+    _t: PhantomData<T>,
+    iter: I,
+    channel: &'s std::sync::mpsc::Sender<E>,
 }
 
-impl<T, V, E> TransmitErrors<T, V, E> for T
-where
-    T: Iterator<Item = Result<V, E>>,
-{
-    /// Transmit errors to a channel, leaving Ok values in the iterator
-    fn transmit_errors(self, _channel: i32) -> FilterMap<T, fn(Result<V, E>) -> Option<V>> {
-        self.filter_map(|v| {
-            match v {
-                Ok(v) => Some(v),
-                Err(_err) => {
-                    // TODO: Transmit to channel
-                    None
-                }
-            }
-        })
+impl<'s, I, E, T> TransmitErrors<'s, I, E, T> {
+    pub(crate) fn new(iter: I, channel: &'s std::sync::mpsc::Sender<E>) -> TransmitErrors<I, E, T> {
+        TransmitErrors {
+            _t: PhantomData,
+            iter,
+            channel,
+        }
     }
 }
+
+impl<'s, I, E, T> Iterator for TransmitErrors<'s, I, E, T>
+where
+    I: Iterator<Item = Result<T, E>>,
+{
+    fn next(&mut self) -> Option<T> {
+        loop {
+            match self.iter.next() {
+                Some(Ok(v)) => return Some(v),
+                Some(Err(v)) => {
+                    self.channel.send(v).unwrap();
+                    continue;
+                }
+                None => return None,
+            }
+        }
+    }
+
+    type Item = T;
+}
+
+pub trait TransmitErrorsExt<T, V, E>
+where
+    T: Iterator<Item = Result<V, E>>,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<E>) -> TransmitErrors<T, E, V>;
+}
+
+impl<T, V, E> TransmitErrorsExt<T, V, E> for T
+where
+    T: Iterator<Item = Result<V, E>>,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<E>) -> TransmitErrors<T, E, V> {
+        TransmitErrors::new(self, channel)
+    }
+}
+
+/* -------------------------------------------------------------------- */
 
 pub trait ExtendTo<T, I, R>
 where
     R: Extend<T>,
     I: IntoIterator<Item = T>,
 {
+    /// Moves the values to mutable reference which implements `extend()`
     fn extend_to(self, mutref: &mut R) -> ();
 }
 
@@ -39,6 +72,7 @@ where
     R: Extend<T>,
     I: IntoIterator<Item = T>,
 {
+    /// Moves the values to mutable reference which implements `extend()`
     fn extend_to(self, mutref: &mut R) {
         mutref.extend(self);
     }
