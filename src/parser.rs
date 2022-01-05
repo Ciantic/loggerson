@@ -1,22 +1,17 @@
-use itertools::Either;
-use itertools::Itertools;
-use once_cell::sync::Lazy;
-use rayon::prelude::ParallelIterator;
-use rayon::prelude::*;
-use regex::Regex;
-use sha2::{Digest, Sha256};
-use std::fmt::Write;
-use std::io::BufRead;
-use std::{fs::File, io, net::IpAddr, path::Path, str::FromStr, time::Instant};
-
 use crate::models::LogEntry;
 use crate::models::Request;
 use crate::models::User;
 use crate::models::Useragent;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use sha2::{Digest, Sha256};
+use std::fmt::Write;
+use std::net::IpAddr;
+use std::str::FromStr;
 
 #[derive(Debug)]
 pub enum ParseError {
-    IoError(std::io::Error),
+    // TODO: Granular errors...
     ParsingError,
 }
 
@@ -59,7 +54,7 @@ pub fn parse(line: String) -> Result<LogEntry, ParseError> {
             let method = methodmatch.as_str();
             let url = urlmatch.as_str();
             let useragent = useragentmatch.as_str();
-            let referrer = referrermatch.as_str();
+            let _referrer = referrermatch.as_str();
             let status = statusmatch
                 .as_str()
                 .parse::<i32>()

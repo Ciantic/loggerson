@@ -1,13 +1,9 @@
 use itertools::Either;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
-use regex::Regex;
-use sha2::{Digest, Sha256};
-use std::fmt::Write;
 use std::io::BufRead;
-use std::{fs::File, io, net::IpAddr, path::Path, str::FromStr, time::Instant};
+use std::{fs::File, io, path::Path, time::Instant};
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
@@ -20,14 +16,10 @@ mod models;
 mod parser;
 
 fn main() {
-    // let pool = init(".cache.db").unwrap();
     let conpool = init(".cache.db").unwrap();
-
-    // e.save(&mut a).unwrap();
     let lines = read_lines(".cache/access_log").unwrap();
-
-    // let par = lines.chunks(100000);
     let par = lines.chunks(100000);
+
     let mut cache = BatchCache::new();
     let mut all_entries = 0;
     let stuff =
@@ -72,15 +64,13 @@ fn main() {
                 let mut conn = conpool.get().unwrap();
                 let tx = conn.transaction().unwrap();
                 {
-                    // let mut insertor = BatchInsertor::new(&tx, &mut cache);
-                    // insertor.add_entries(&entries);
-                    batch_insert(&tx, &entries, &mut cache);
+                    batch_insert(&tx, &entries, &mut cache).unwrap();
                 }
                 tx.commit().unwrap();
                 Ok(())
             });
 
-    stuff.for_each(|r| {});
+    stuff.for_each(|_r| {});
 
     println!("All entries {}", all_entries);
 }
