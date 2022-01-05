@@ -1,8 +1,6 @@
-use chrono::{DateTime, FixedOffset};
 use itertools::Either;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
-use once_cell::sync::OnceCell;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
 use regex::Regex;
@@ -11,7 +9,8 @@ use std::fmt::Write;
 use std::io::BufRead;
 use std::{fs::File, io, net::IpAddr, path::Path, str::FromStr, time::Instant};
 
-use crate::db::{init, BatchCache, BatchInsertor};
+use crate::db::batch_insert;
+use crate::db::{init, BatchCache};
 
 mod db;
 
@@ -186,8 +185,9 @@ fn main() {
                 let mut conn = conpool.get().unwrap();
                 let tx = conn.transaction().unwrap();
                 {
-                    let mut insertor = BatchInsertor::new(&tx, &mut cache);
-                    insertor.add_entries(&entries);
+                    // let mut insertor = BatchInsertor::new(&tx, &mut cache);
+                    // insertor.add_entries(&entries);
+                    batch_insert(&tx, &entries, &mut cache);
                 }
                 tx.commit().unwrap();
                 Ok(())
