@@ -1,4 +1,7 @@
-use crate::models::{LogEntry, Request, User, Useragent};
+use crate::{
+    iterutils::{ExtendTo, TransmitErrors},
+    models::{LogEntry, Request, User, Useragent},
+};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection};
@@ -53,18 +56,19 @@ pub fn batch_insert(
             ",
         )?;
 
-        let rows: Vec<_> = Result::from_iter(stmt.query_map(params![first, last], |row| {
-            Ok((
-                Request {
-                    method: row.get(1)?,
-                    url: row.get(2)?,
-                    status_code: row.get(3)?,
-                },
-                row.get::<_, i32>(0)?,
-            ))
-        })?)?;
-
-        caches.requests_cache.extend(rows);
+        stmt.query(params![first, last])?
+            .mapped(|row| {
+                Ok((
+                    Request {
+                        method: row.get(1)?,
+                        url: row.get(2)?,
+                        status_code: row.get(3)?,
+                    },
+                    row.get::<_, i32>(0)?,
+                ))
+            })
+            .transmit_errors(15)
+            .extend_to(&mut caches.requests_cache);
     }
 
     {
@@ -83,17 +87,18 @@ pub fn batch_insert(
                 ",
         )?;
 
-        let rows: Vec<_> = Result::from_iter(stmt.query_map(params![first, last], |row| {
-            Ok((
-                User {
-                    hash: row.get(2)?,
-                    useragent: Some(Useragent { value: row.get(3)? }),
-                },
-                row.get::<_, i32>(0)?,
-            ))
-        })?)?;
-
-        caches.users_cache.extend(rows);
+        stmt.query(params![first, last])?
+            .mapped(|row| {
+                Ok((
+                    User {
+                        hash: row.get(1)?,
+                        useragent: Some(Useragent { value: row.get(2)? }),
+                    },
+                    row.get::<_, i32>(0)?,
+                ))
+            })
+            .transmit_errors(15)
+            .extend_to(&mut caches.users_cache);
     }
 
     {

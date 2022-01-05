@@ -12,6 +12,7 @@ use crate::parser::parse;
 use crate::parser::ParseError;
 
 mod db;
+mod iterutils;
 mod models;
 mod parser;
 
