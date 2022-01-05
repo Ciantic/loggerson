@@ -11,126 +11,13 @@ use std::{fs::File, io, net::IpAddr, path::Path, str::FromStr, time::Instant};
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
+use crate::models::LogEntry;
+use crate::parser::parse;
+use crate::parser::ParseError;
 
 mod db;
-
-#[derive(Debug)]
-pub enum ParseError {
-    IoError(std::io::Error),
-    ParsingError,
-}
-
-// https://httpd.apache.org/docs/2.4/logs.html
-// (Looks like double quoted values need not escaping support?)
-static COMBINED_LOG_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"^(?P<ip>[^ ]+) [^ ]+ [^ ]+ \[(?P<date>[^\]]+)\] "(?P<method>[^ "]+) (?P<url>[^ "]+) (?P<proto>[^ "]+)" (?P<status>\d+) (?P<bytes>\d+) "(?P<referrer>[^"]*)" "(?P<useragent>[^"]*)""#,
-    ).unwrap()
-});
-
-#[derive(PartialEq, Eq, Clone, Hash, Debug)]
-pub struct Request {
-    method: String,
-    url: String,
-    status_code: i32,
-}
-
-#[derive(PartialEq, Eq, Clone, Hash, Debug)]
-pub struct User {
-    hash: Option<String>,
-    useragent: Option<Useragent>,
-    // TODO: Country struct
-}
-
-#[derive(PartialEq, Eq, Clone, Hash, Debug)]
-pub struct Useragent {
-    value: String,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct LogEntry {
-    timestamp: i64,
-    request: Request,
-    user: User,
-    // TODO: Referrer struct
-}
-
-impl LogEntry {
-    pub fn parse(line: String) -> Result<LogEntry, ParseError> {
-        use ParseError::*;
-        if let Some(captures) = COMBINED_LOG_REGEX.captures(&line) {
-            if let (
-                Some(ipmatch),
-                Some(datematch),
-                Some(methodmatch),
-                Some(urlmatch),
-                // Some(_protomatch),
-                Some(statusmatch),
-                // Some(_bytesmatch),
-                Some(referrermatch),
-                Some(useragentmatch),
-            ) = (
-                captures.name("ip"),
-                captures.name("date"),
-                captures.name("method"),
-                captures.name("url"),
-                // captures.name("proto"),
-                captures.name("status"),
-                // captures.name("bytes"),
-                captures.name("referrer"),
-                captures.name("useragent"),
-            ) {
-                let ip = IpAddr::from_str(ipmatch.as_str()).map_err(|_| ParsingError)?;
-                let dtime =
-                    chrono::DateTime::parse_from_str(datematch.as_str(), "%d/%b/%Y:%H:%M:%S %z")
-                        .map_err(|_| ParsingError)?;
-                let method = methodmatch.as_str();
-                let url = urlmatch.as_str();
-                let useragent = useragentmatch.as_str();
-                let referrer = referrermatch.as_str();
-                let status = statusmatch
-                    .as_str()
-                    .parse::<i32>()
-                    .map_err(|_| ParsingError)?;
-
-                let mut hasher = Sha256::new();
-                hasher.update(ip.to_string());
-                hasher.update(&useragent);
-                let hashbytes = hasher.finalize();
-                let mut hash = String::with_capacity(32);
-                for &b in hashbytes.as_slice() {
-                    write!(&mut hash, "{:02x}", b).unwrap();
-                }
-
-                /*
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(&hashbytes);
-                */
-
-                Ok(LogEntry {
-                    timestamp: dtime.timestamp(),
-                    user: User {
-                        hash: Some(hash),
-                        useragent: Some(Useragent {
-                            value: useragent.to_owned(),
-                        }),
-                    },
-                    request: Request {
-                        method: method.to_owned(),
-                        status_code: status,
-                        url: url.to_owned(),
-                    },
-                })
-            } else {
-                // println!("Parsing row failed 1 {}", &line);
-                Err(ParsingError)
-            }
-        } else {
-            // println!("Parsing row failed 2 {}", &line);
-            Err(ParsingError)
-        }
-    }
-}
+mod models;
+mod parser;
 
 fn main() {
     // let pool = init(".cache.db").unwrap();
@@ -154,7 +41,7 @@ fn main() {
                 println!("Parsing a chunk {} sized {}...", chunk_n + 1, lines.len());
                 let parse_results = lines
                     .par_drain(..)
-                    .map(|lineresult| LogEntry::parse(lineresult.unwrap()));
+                    .map(|lineresult| parse(lineresult.unwrap()));
 
                 // Separate failures and successes
                 let (mut entries, failures): (Vec<LogEntry>, Vec<ParseError>) = parse_results

@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
+use crate::models::{LogEntry, Request, User, Useragent};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection};
-
-use crate::{LogEntry, Request, User, Useragent};
+use std::collections::HashMap;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
