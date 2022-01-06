@@ -1,6 +1,7 @@
 use crate::{
     iterutils::{ExtendTo, TransmitErrorsExt},
     models::{LogEntry, Request, User, Useragent},
+    Error,
 };
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -35,7 +36,7 @@ impl BatchCache {
     pub fn populate(
         &mut self,
         con: &Connection,
-        error_channel: &std::sync::mpsc::Sender<rusqlite::Error>,
+        error_channel: &std::sync::mpsc::Sender<Error>,
     ) -> rusqlite::Result<()> {
         {
             // Update requests cache
@@ -204,7 +205,7 @@ fn insert_entry(
 }
 
 pub fn batch_insert(
-    error_channel: &std::sync::mpsc::Sender<rusqlite::Error>,
+    error_channel: &std::sync::mpsc::Sender<Error>,
     con: &Connection,
     entries: &Vec<LogEntry>,
     caches: &mut BatchCache,

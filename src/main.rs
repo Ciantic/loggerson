@@ -1,5 +1,7 @@
+use derive_more::From;
 use itertools::Either;
 use itertools::Itertools;
+use iterutils::TransmitErrorsExt;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
 use std::io::BufRead;
@@ -17,37 +19,44 @@ mod iterutils;
 mod models;
 mod parser;
 
+#[derive(From, Debug)]
 pub enum Error {
     LogParseError(ParseError),
     SqliteError(rusqlite::Error),
     LogFileIOError(io::Error),
 }
 
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
 enum ChunkMsg {
     Lines(Vec<LogEntry>),
     EndOfLines,
 }
 
+static CHUNK_SIZE: usize = 100000;
+static CHUNK_QUEUE: usize = 3;
+
 fn main() {
     let conpool = init(".cache.db").unwrap();
-    let (chunks_sender, chunks_receiver) = std::sync::mpsc::sync_channel::<ChunkMsg>(3);
+    let (chunks_sender, chunks_receiver) = std::sync::mpsc::sync_channel::<ChunkMsg>(CHUNK_QUEUE);
     let (error_sender, error_receiver) = std::sync::mpsc::channel();
 
     // Parser thread
+    let parser_error_sender = error_sender.clone();
     thread::spawn(move || {
         let lines = read_lines(".cache/access_log").unwrap();
-        let line_chunks = lines.chunks(100000);
+        let line_chunks = lines.chunks(CHUNK_SIZE);
         line_chunks
             .into_iter()
             .enumerate()
             .map(|(chunk_n, chunkedlines)| -> Result<(), ParseError> {
                 let measure = Instant::now();
-                let mut lines = chunkedlines.collect_vec();
+                let lines = chunkedlines.collect_vec();
 
                 // Parse all rows in parllel
                 println!("Parsing a chunk {} sized {}...", chunk_n + 1, lines.len());
                 let parse_results = lines
-                    .par_drain(..)
+                    .into_par_iter()
                     .map(|lineresult| parse(lineresult.unwrap()));
 
                 // Separate failures and successes
@@ -70,11 +79,13 @@ fn main() {
                 chunks_sender.send(ChunkMsg::Lines(entries)).unwrap();
                 Ok(())
             })
+            .transmit_errors(&parser_error_sender)
             .for_each(drop);
         chunks_sender.send(ChunkMsg::EndOfLines).unwrap();
     });
 
     // SQL Insert thread
+    let insert_error_sender = error_sender.clone();
     thread::spawn(move || {
         let mut cache = BatchCache::new();
 
@@ -91,7 +102,7 @@ fn main() {
 
                     let mut conn = conpool.get().unwrap();
                     let tx = conn.transaction().unwrap();
-                    batch_insert(&error_sender, &tx, &entries, &mut cache).unwrap();
+                    batch_insert(&insert_error_sender, &tx, &entries, &mut cache).unwrap();
                     tx.commit().unwrap();
 
                     println!(

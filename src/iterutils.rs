@@ -1,25 +1,31 @@
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 #[derive(Clone)]
-pub struct TransmitErrors<'s, I, E, T>
+pub struct TransmitErrors<'s, I, E, T, M>
 where
     I: Iterator<Item = Result<T, E>>,
+    M: From<E>,
 {
     iter: I,
-    channel: &'s std::sync::mpsc::Sender<E>,
+    channel: &'s std::sync::mpsc::Sender<M>,
 }
 
-impl<'s, I, E, T> TransmitErrors<'s, I, E, T>
+impl<'s, I, E, T, M> TransmitErrors<'s, I, E, T, M>
 where
     I: Iterator<Item = Result<T, E>>,
+    M: From<E>,
 {
-    pub(crate) fn new(iter: I, channel: &'s std::sync::mpsc::Sender<E>) -> TransmitErrors<I, E, T> {
+    pub(crate) fn new(
+        iter: I,
+        channel: &'s std::sync::mpsc::Sender<M>,
+    ) -> TransmitErrors<I, E, T, M> {
         TransmitErrors { iter, channel }
     }
 }
 
-impl<'s, I, E, T> Iterator for TransmitErrors<'s, I, E, T>
+impl<'s, I, E, T, M> Iterator for TransmitErrors<'s, I, E, T, M>
 where
     I: Iterator<Item = Result<T, E>>,
+    M: From<E>,
 {
     #[inline]
     fn next(&mut self) -> Option<T> {
@@ -27,7 +33,7 @@ where
             match self.iter.next() {
                 Some(Ok(v)) => return Some(v),
                 Some(Err(v)) => {
-                    self.channel.send(v).unwrap();
+                    self.channel.send(M::from(v)).unwrap();
                     continue;
                 }
                 None => return None,
@@ -39,20 +45,22 @@ where
 }
 
 // Adds the `transmit_error` to the Iterator
-pub trait TransmitErrorsExt<T, V, E>
+pub trait TransmitErrorsExt<T, V, E, M>
 where
     T: Iterator<Item = Result<V, E>>,
+    M: From<E>,
 {
     /// Transmit errors to a channel, leaving Ok values in the iterator
-    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<E>) -> TransmitErrors<T, E, V>;
+    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<M>) -> TransmitErrors<T, E, V, M>;
 }
 
-impl<T, V, E> TransmitErrorsExt<T, V, E> for T
+impl<T, V, E, M> TransmitErrorsExt<T, V, E, M> for T
 where
     T: Iterator<Item = Result<V, E>>,
+    M: From<E>,
 {
     /// Transmit errors to a channel, leaving Ok values in the iterator
-    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<E>) -> TransmitErrors<T, E, V> {
+    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<M>) -> TransmitErrors<T, E, V, M> {
         TransmitErrors::new(self, channel)
     }
 }
