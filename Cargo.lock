@@ -364,6 +364,7 @@ name = "loggerson"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "crossbeam-channel",
  "derive_more",
  "itertools",
  "once_cell",

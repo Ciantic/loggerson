@@ -36,7 +36,7 @@ impl BatchCache {
     pub fn populate(
         &mut self,
         con: &Connection,
-        error_channel: &std::sync::mpsc::Sender<Error>,
+        error_channel: &crossbeam_channel::Sender<Error>,
     ) -> rusqlite::Result<()> {
         {
             // Update requests cache
@@ -205,7 +205,7 @@ fn insert_entry(
 }
 
 pub fn batch_insert(
-    error_channel: &std::sync::mpsc::Sender<Error>,
+    error_channel: &crossbeam_channel::Sender<Error>,
     con: &Connection,
     entries: &Vec<LogEntry>,
     caches: &mut BatchCache,

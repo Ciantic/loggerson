@@ -1,3 +1,5 @@
+use rayon::iter::ParallelIterator;
+
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 #[derive(Clone)]
 pub struct TransmitErrors<'s, I, E, T, M>
@@ -6,7 +8,7 @@ where
     M: From<E>,
 {
     iter: I,
-    channel: &'s std::sync::mpsc::Sender<M>,
+    channel: &'s crossbeam_channel::Sender<M>,
 }
 
 impl<'s, I, E, T, M> TransmitErrors<'s, I, E, T, M>
@@ -16,7 +18,7 @@ where
 {
     pub(crate) fn new(
         iter: I,
-        channel: &'s std::sync::mpsc::Sender<M>,
+        channel: &'s crossbeam_channel::Sender<M>,
     ) -> TransmitErrors<I, E, T, M> {
         TransmitErrors { iter, channel }
     }
@@ -51,7 +53,7 @@ where
     M: From<E>,
 {
     /// Transmit errors to a channel, leaving Ok values in the iterator
-    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<M>) -> TransmitErrors<T, E, V, M>;
+    fn transmit_errors(self, channel: &crossbeam_channel::Sender<M>) -> TransmitErrors<T, E, V, M>;
 }
 
 impl<T, V, E, M> TransmitErrorsExt<T, V, E, M> for T
@@ -60,8 +62,87 @@ where
     M: From<E>,
 {
     /// Transmit errors to a channel, leaving Ok values in the iterator
-    fn transmit_errors(self, channel: &std::sync::mpsc::Sender<M>) -> TransmitErrors<T, E, V, M> {
+    fn transmit_errors(self, channel: &crossbeam_channel::Sender<M>) -> TransmitErrors<T, E, V, M> {
         TransmitErrors::new(self, channel)
+    }
+}
+
+/* -------------------------------------------------------------------- */
+
+// Transmit errors (parallel version)
+
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+#[derive(Clone)]
+pub struct TransmitErrorsPar<I, E, T, M>
+where
+    I: ParallelIterator<Item = Result<T, E>>,
+    M: From<E>,
+{
+    iter: I,
+    channel: crossbeam_channel::Sender<M>,
+}
+
+impl<I, E, T, M> TransmitErrorsPar<I, E, T, M>
+where
+    I: ParallelIterator<Item = Result<T, E>>,
+    M: From<E>,
+{
+    pub(crate) fn new(
+        iter: I,
+        channel: crossbeam_channel::Sender<M>,
+    ) -> TransmitErrorsPar<I, E, T, M> {
+        TransmitErrorsPar { iter, channel }
+    }
+}
+
+impl<I, E, T, M> ParallelIterator for TransmitErrorsPar<I, E, T, M>
+where
+    I: ParallelIterator<Item = Result<T, E>>,
+    M: From<E> + Send,
+    T: Send,
+{
+    type Item = T;
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: rayon::iter::plumbing::UnindexedConsumer<Self::Item>,
+    {
+        self.iter
+            .filter_map(|v| match v {
+                Ok(v) => Some(v),
+                Err(v) => {
+                    self.channel.send(M::from(v)).unwrap();
+                    None
+                }
+            })
+            .drive_unindexed(consumer)
+    }
+}
+
+// Adds the `transmit_error` to the ParallelIterator
+pub trait TransmitErrorsParExt<T, V, E, M>
+where
+    T: ParallelIterator<Item = Result<V, E>>,
+    M: From<E>,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn transmit_errors(
+        self,
+        channel: &crossbeam_channel::Sender<M>,
+    ) -> TransmitErrorsPar<T, E, V, M>;
+}
+
+impl<T, V, E, M> TransmitErrorsParExt<T, V, E, M> for T
+where
+    T: ParallelIterator<Item = Result<V, E>>,
+    M: From<E>,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn transmit_errors(
+        self,
+        channel: &crossbeam_channel::Sender<M>,
+    ) -> TransmitErrorsPar<T, E, V, M> {
+        TransmitErrorsPar::new(self, channel.clone())
     }
 }
 

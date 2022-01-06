@@ -10,6 +10,7 @@ use std::{fs::File, io, path::Path, time::Instant};
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
+use crate::iterutils::TransmitErrorsParExt;
 use crate::models::LogEntry;
 use crate::parser::parse;
 use crate::parser::ParseError;
@@ -38,8 +39,8 @@ static CHUNK_QUEUE: usize = 3;
 
 fn main() {
     let conpool = init(".cache.db").unwrap();
-    let (chunks_sender, chunks_receiver) = std::sync::mpsc::sync_channel::<ChunkMsg>(CHUNK_QUEUE);
-    let (error_sender, error_receiver) = std::sync::mpsc::channel();
+    let (chunks_sender, chunks_receiver) = crossbeam_channel::bounded::<ChunkMsg>(CHUNK_QUEUE);
+    let (error_sender, error_receiver) = crossbeam_channel::unbounded();
 
     // Parser thread
     let parser_error_sender = error_sender.clone();
@@ -53,11 +54,12 @@ fn main() {
                 let measure = Instant::now();
                 let lines = chunkedlines.collect_vec();
 
-                // Parse all rows in parllel
+                // Parse all rows in parallel
                 println!("Parsing a chunk {} sized {}...", chunk_n + 1, lines.len());
                 let parse_results = lines
                     .into_par_iter()
-                    .map(|lineresult| parse(lineresult.unwrap()));
+                    .transmit_errors(&parser_error_sender)
+                    .map(parse);
 
                 // Separate failures and successes
                 let (mut entries, failures): (Vec<LogEntry>, Vec<ParseError>) = parse_results
