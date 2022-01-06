@@ -2,23 +2,19 @@ use crate::{
     iterutils::{ExtendTo, TransmitErrorsExt},
     models::{LogEntry, Request, User, Useragent},
 };
-use r2d2::{Pool, PooledConnection};
+use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
-fn create_schema(conn: &PooledConnection<SqliteConnectionManager>) -> Result<(), rusqlite::Error> {
-    conn.execute_batch(SCHEMA)
-}
-
 pub fn init(path: &str) -> Result<Pool<SqliteConnectionManager>, rusqlite::Error> {
     // let manager = SqliteConnectionManager::memory();
     let manager = SqliteConnectionManager::file(path);
     let pool = r2d2::Pool::new(manager).unwrap();
     let conn = pool.get().unwrap();
-    create_schema(&conn)?;
+    conn.execute_batch(SCHEMA)?;
     Ok(pool)
 }
 pub struct BatchCache {
@@ -64,7 +60,6 @@ impl BatchCache {
                 .extend_to(&mut self.requests_cache);
         }
 
-        println!("Update users cache");
         {
             // Update users cache
             let mut stmt = con.prepare_cached(
@@ -93,7 +88,6 @@ impl BatchCache {
                 .extend_to(&mut self.users_cache);
         }
 
-        println!("Update useragents");
         {
             // Update useragents cache
             let mut stmt = con.prepare_cached(
