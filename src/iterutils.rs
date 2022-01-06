@@ -1,5 +1,3 @@
-use std::{iter::FilterMap, marker::PhantomData};
-
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 #[derive(Clone)]
 pub struct TransmitErrors<'s, I, E, T>

@@ -17,29 +17,32 @@ mod iterutils;
 mod models;
 mod parser;
 
+pub enum Error {
+    LogParseError(ParseError),
+    SqliteError(rusqlite::Error),
+    LogFileIOError(io::Error),
+}
+
+enum ChunkMsg {
+    Lines(Vec<LogEntry>),
+    EndOfLines,
+}
+
 fn main() {
     let conpool = init(".cache.db").unwrap();
-    let lines = read_lines(".cache/access_log").unwrap();
-    let line_chunks = lines.chunks(100000);
-
+    let (chunks_sender, chunks_receiver) = std::sync::mpsc::sync_channel::<ChunkMsg>(3);
     let (error_sender, error_receiver) = std::sync::mpsc::channel();
-    let mut cache = BatchCache::new();
-    let mut all_entries = 0;
 
-    // Start a worker thread
+    // Parser thread
     thread::spawn(move || {
-        // Initialize the cache entries
-        cache
-            .populate(&conpool.get().unwrap(), &error_sender)
-            .unwrap();
-
-        // Iterate over the chunks
+        let lines = read_lines(".cache/access_log").unwrap();
+        let line_chunks = lines.chunks(100000);
         line_chunks
             .into_iter()
             .enumerate()
             .map(|(chunk_n, chunkedlines)| -> Result<(), ParseError> {
-                let start_of_chunk_time = Instant::now();
-                let mut lines = chunkedlines.collect::<Vec<_>>();
+                let measure = Instant::now();
+                let mut lines = chunkedlines.collect_vec();
 
                 // Parse all rows in parllel
                 println!("Parsing a chunk {} sized {}...", chunk_n + 1, lines.len());
@@ -57,49 +60,54 @@ fn main() {
                 // Sort by timestamp
                 entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
-                all_entries += entries.len();
-
                 println!(
                     "Parsed a chunk in {} ms, successes {}, failures {}.",
-                    (Instant::now() - start_of_chunk_time).as_millis(),
+                    (Instant::now() - measure).as_millis(),
                     entries.len(),
                     failures.len()
                 );
 
-                let first = entries.first().unwrap();
-                let last = entries.last().unwrap();
-                println!(
-                    "Inserting to database all chunks between {} and {}...",
-                    first.timestamp, last.timestamp
-                );
-
-                // println!(
-                //     "Caches {} {} {}",
-                //     cache.requests_cache.len(),
-                //     cache.useragents_cache.len(),
-                //     cache.users_cache.len()
-                // );
-
-                let mut conn = conpool.get().unwrap();
-                let tx = conn.transaction().unwrap();
-                {
-                    batch_insert(&error_sender, &tx, &entries, &mut cache).unwrap();
-                    all_entries += 1;
-                }
-                tx.commit().unwrap();
+                chunks_sender.send(ChunkMsg::Lines(entries)).unwrap();
                 Ok(())
             })
             .for_each(drop);
+        chunks_sender.send(ChunkMsg::EndOfLines).unwrap();
+    });
+
+    // SQL Insert thread
+    thread::spawn(move || {
+        let mut cache = BatchCache::new();
+
+        // Pre-populate caches
+        cache
+            .populate(&conpool.get().unwrap(), &error_sender)
+            .unwrap();
+
+        for chunk_message in chunks_receiver {
+            match chunk_message {
+                ChunkMsg::Lines(entries) => {
+                    let start_time = Instant::now();
+                    println!("Batch insert started...");
+
+                    let mut conn = conpool.get().unwrap();
+                    let tx = conn.transaction().unwrap();
+                    batch_insert(&error_sender, &tx, &entries, &mut cache).unwrap();
+                    tx.commit().unwrap();
+
+                    println!(
+                        "Batch insert ended in {} ms.",
+                        (Instant::now() - start_time).as_millis()
+                    );
+                }
+                ChunkMsg::EndOfLines => break,
+            }
+        }
     });
 
     // Listen any errors inside the batch inserts
-    let mut errs = 0;
-    for m in error_receiver {
-        println!("Err {:?}", m);
-        errs += 1;
+    for error in error_receiver {
+        println!("Error: {:?}", error);
     }
-
-    println!("All entries {}, errs {}", all_entries, errs);
 }
 
 // The output is wrapped in a Result to allow matching on errors

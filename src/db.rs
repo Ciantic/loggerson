@@ -2,10 +2,9 @@ use crate::{
     iterutils::{ExtendTo, TransmitErrorsExt},
     models::{LogEntry, Request, User, Useragent},
 };
-use itertools::Itertools;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection, ToSql};
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
 const SCHEMA: &str = include_str!("schema.sql");
