@@ -25,11 +25,15 @@ fn main() {
     let (error_sender, error_receiver) = std::sync::mpsc::channel();
     let mut cache = BatchCache::new();
     let mut all_entries = 0;
+
+    // Start a worker thread
     thread::spawn(move || {
+        // Initialize the cache entries
         cache
             .populate(&conpool.get().unwrap(), &error_sender)
             .unwrap();
 
+        // Iterate over the chunks
         line_chunks
             .into_iter()
             .enumerate()
@@ -69,17 +73,18 @@ fn main() {
                     first.timestamp, last.timestamp
                 );
 
-                println!(
-                    "Caches {} {} {}",
-                    cache.requests_cache.len(),
-                    cache.useragents_cache.len(),
-                    cache.users_cache.len()
-                );
+                // println!(
+                //     "Caches {} {} {}",
+                //     cache.requests_cache.len(),
+                //     cache.useragents_cache.len(),
+                //     cache.users_cache.len()
+                // );
 
                 let mut conn = conpool.get().unwrap();
                 let tx = conn.transaction().unwrap();
                 {
                     batch_insert(&error_sender, &tx, &entries, &mut cache).unwrap();
+                    all_entries += 1;
                 }
                 tx.commit().unwrap();
                 Ok(())
@@ -87,6 +92,7 @@ fn main() {
             .for_each(drop);
     });
 
+    // Listen any errors inside the batch inserts
     let mut errs = 0;
     for m in error_receiver {
         println!("Err {:?}", m);

@@ -5,7 +5,7 @@ use crate::{
 use itertools::Itertools;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, ToSql};
 use std::collections::HashMap;
 
 const SCHEMA: &str = include_str!("schema.sql");
@@ -115,140 +115,111 @@ impl BatchCache {
     }
 }
 
+fn insert_request(
+    caches: &mut BatchCache,
+    con: &Connection,
+    request: &Request,
+) -> rusqlite::Result<i32> {
+    if let Some(request_id) = caches.requests_cache.get(request) {
+        return Ok(request_id.to_owned());
+    }
+    let mut stmt = con.prepare_cached(
+        "
+            INSERT INTO 
+            requests(method, url, status_code) 
+            VALUES(?, ?, ?)
+            RETURNING id
+            ",
+    )?;
+    let request_id = stmt.query_row(
+        params![request.method, request.url, request.status_code],
+        // Get the ID
+        |row| Ok(row.get(0)?),
+    )?;
+    caches.requests_cache.insert(request.to_owned(), request_id);
+    Ok(request_id)
+}
+
+fn inser_useragent(
+    caches: &mut BatchCache,
+    con: &Connection,
+    object: &Useragent,
+) -> rusqlite::Result<i32> {
+    if let Some(request_id) = caches.useragents_cache.get(object) {
+        return Ok(request_id.to_owned());
+    }
+    let mut stmt = con.prepare_cached(
+        "
+            INSERT INTO 
+            useragents(value) 
+            VALUES(?) 
+            RETURNING id
+        ",
+    )?;
+    let request_id = stmt.query_row(
+        params![object.value],
+        // Get the ID
+        |row| Ok(row.get(0)?),
+    )?;
+    caches
+        .useragents_cache
+        .insert(object.to_owned(), request_id);
+    Ok(request_id)
+}
+
+fn insert_user(caches: &mut BatchCache, con: &Connection, object: &User) -> rusqlite::Result<i32> {
+    if let Some(request_id) = caches.users_cache.get(object) {
+        return Ok(request_id.to_owned());
+    }
+    // TODO: Remove unwrap
+    let useragent_id = inser_useragent(caches, &con, &object.useragent.clone().unwrap())?;
+    let mut stmt = con.prepare_cached(
+        "
+            INSERT INTO
+            users(hash, useragent_id)
+            VALUES(?, ?)
+            RETURNING id
+        ",
+    )?;
+    let request_id = stmt.query_row(
+        params![object.hash, useragent_id],
+        // Get the ID
+        |row| Ok(row.get(0)?),
+    )?;
+    caches.users_cache.insert(object.to_owned(), request_id);
+    Ok(request_id)
+}
+
+fn insert_entry(
+    caches: &mut BatchCache,
+    con: &Connection,
+    object: &LogEntry,
+) -> rusqlite::Result<()> {
+    let request_id = insert_request(caches, &con, &object.request)?;
+    let user_id = insert_user(caches, &con, &object.user)?;
+    let mut stmt = con.prepare_cached(
+        "
+            INSERT INTO
+            entrys(timestamp, request_id, user_id)
+            VALUES(?, ?, ?)
+            ON CONFLICT DO NOTHING
+            ",
+    )?;
+    stmt.execute(params![object.timestamp, request_id, user_id])?;
+
+    Ok(())
+}
+
 pub fn batch_insert(
     error_channel: &std::sync::mpsc::Sender<rusqlite::Error>,
     con: &Connection,
     entries: &Vec<LogEntry>,
     caches: &mut BatchCache,
 ) -> rusqlite::Result<()> {
-    println!("Insert requests");
-    {
-        // Insert requests, update cache
-        let mut stmt = con.prepare_cached(
-            "
-                INSERT INTO 
-                requests(method, url, status_code) 
-                VALUES(?, ?, ?)
-                RETURNING id
-                ",
-        )?;
-
-        entries
-            .iter()
-            .map(|e| &e.request)
-            .filter(|r| !caches.requests_cache.contains_key(r))
-            .unique()
-            .map(|row| -> rusqlite::Result<_> {
-                Ok((
-                    row.clone(),
-                    stmt.query_row(
-                        params![row.method, row.url, row.status_code],
-                        // Get the ID
-                        |row| Ok(row.get(0)?),
-                    )?,
-                ))
-            })
-            .transmit_errors(&error_channel)
-            .collect_vec()
-            .extend_to(&mut caches.requests_cache);
-    }
-
-    println!("Insert useragents");
-    {
-        // Insert useragents, update cache
-        let mut stmt = con.prepare_cached(
-            "
-                INSERT INTO 
-                useragents(value) 
-                VALUES(?) 
-                RETURNING id
-                ",
-        )?;
-
-        entries
-            .iter()
-            .filter_map(|e| e.user.useragent.to_owned())
-            .unique()
-            .filter(|r| !caches.useragents_cache.contains_key(r))
-            .map(|useragent| -> rusqlite::Result<_> {
-                Ok((
-                    useragent.clone(),
-                    stmt.query_row(
-                        params![useragent.value],
-                        // Get id
-                        |row| Ok(row.get(0)?),
-                    )?,
-                ))
-            })
-            .transmit_errors(&error_channel)
-            .collect_vec()
-            .extend_to(&mut caches.useragents_cache);
-    }
-
-    println!("Insert users");
-    {
-        // Insert users, update cache
-        let mut stmt = con.prepare_cached(
-            "
-                INSERT INTO
-                users(hash, useragent_id)
-                VALUES(?, ?)
-                RETURNING id
-                ",
-        )?;
-
-        entries
-            .iter()
-            .filter(|r| !caches.users_cache.contains_key(&r.user))
-            .filter_map(|entry| -> Option<_> {
-                // TODO: Convert these to errors
-                let useragent = &entry.user.useragent.clone().unwrap();
-                let useragent_id = caches.useragents_cache.get(useragent).unwrap();
-                let hash = entry.user.hash.clone().unwrap();
-
-                Some((&entry.user, useragent_id, hash))
-            })
-            .unique()
-            .map(|(user, useragent_id, hash)| {
-                Ok((
-                    user.clone(),
-                    stmt.query_row(
-                        params![hash, useragent_id],
-                        // Get the id
-                        |row| Ok(row.get(0)?),
-                    )?,
-                ))
-            })
-            .transmit_errors(&error_channel)
-            .collect_vec()
-            .extend_to(&mut caches.users_cache);
-    }
-
-    println!("Insert entries");
-    {
-        // Insert entries
-        let mut stmt = con.prepare_cached(
-            "
-                INSERT INTO
-                entrys(timestamp, request_id, user_id)
-                VALUES(?, ?, ?)
-                ON CONFLICT DO NOTHING
-                ",
-        )?;
-
-        entries
-            .iter()
-            .filter_map(|entry| {
-                // TODO: Convert these to errors
-                let request_id = caches.requests_cache.get(&entry.request).unwrap();
-                let user_id = caches.users_cache.get(&entry.user).unwrap();
-                Some((entry, request_id, user_id))
-            })
-            .map(|(entry, request_id, user_id)| {
-                stmt.execute(params![entry.timestamp, request_id, user_id])
-            })
-            .transmit_errors(&error_channel)
-            .for_each(drop);
-    }
+    entries
+        .iter()
+        .map(|entry| insert_entry(caches, &con, entry))
+        .transmit_errors(&error_channel)
+        .for_each(drop);
     Ok(())
 }
