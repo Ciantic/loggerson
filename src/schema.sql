@@ -1,4 +1,4 @@
-PRAGMA journal_mode = WAL;
+-- PRAGMA journal_mode = WAL;
 -- PRAGMA synchronous = OFF;
 
 -- PRAGMA journal_mode = OFF;

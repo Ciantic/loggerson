@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'loggerson'",
+            "cargo": {
+                "args": ["build", "--bin=loggerson", "--package=loggerson"],
+                "filter": {
+                    "name": "loggerson",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'loggerson'",
+            "cargo": {
+                "args": ["test", "--no-run", "--bin=loggerson", "--package=loggerson"],
+                "filter": {
+                    "name": "loggerson",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

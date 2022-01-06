@@ -3,6 +3,7 @@ use itertools::Itertools;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
 use std::io::BufRead;
+use std::thread;
 use std::{fs::File, io, path::Path, time::Instant};
 
 use crate::db::batch_insert;
@@ -19,13 +20,18 @@ mod parser;
 fn main() {
     let conpool = init(".cache.db").unwrap();
     let lines = read_lines(".cache/access_log").unwrap();
-    let par = lines.chunks(100000);
+    let line_chunks = lines.chunks(100000);
 
     let (error_sender, error_receiver) = std::sync::mpsc::channel();
     let mut cache = BatchCache::new();
     let mut all_entries = 0;
-    let stuff =
-        par.into_iter()
+    thread::spawn(move || {
+        cache
+            .populate(&conpool.get().unwrap(), &error_sender)
+            .unwrap();
+
+        line_chunks
+            .into_iter()
             .enumerate()
             .map(|(chunk_n, chunkedlines)| -> Result<(), ParseError> {
                 let start_of_chunk_time = Instant::now();
@@ -63,6 +69,13 @@ fn main() {
                     first.timestamp, last.timestamp
                 );
 
+                println!(
+                    "Caches {} {} {}",
+                    cache.requests_cache.len(),
+                    cache.useragents_cache.len(),
+                    cache.users_cache.len()
+                );
+
                 let mut conn = conpool.get().unwrap();
                 let tx = conn.transaction().unwrap();
                 {
@@ -70,11 +83,17 @@ fn main() {
                 }
                 tx.commit().unwrap();
                 Ok(())
-            });
+            })
+            .for_each(drop);
+    });
 
-    stuff.for_each(|_r| {});
+    let mut errs = 0;
+    for m in error_receiver {
+        println!("Err {:?}", m);
+        errs += 1;
+    }
 
-    println!("All entries {}", all_entries);
+    println!("All entries {}, errs {}", all_entries, errs);
 }
 
 // The output is wrapped in a Result to allow matching on errors

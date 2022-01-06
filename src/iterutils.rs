@@ -2,19 +2,20 @@ use std::{iter::FilterMap, marker::PhantomData};
 
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 #[derive(Clone)]
-pub struct TransmitErrors<'s, I, E, T> {
-    _t: PhantomData<T>,
+pub struct TransmitErrors<'s, I, E, T>
+where
+    I: Iterator<Item = Result<T, E>>,
+{
     iter: I,
     channel: &'s std::sync::mpsc::Sender<E>,
 }
 
-impl<'s, I, E, T> TransmitErrors<'s, I, E, T> {
+impl<'s, I, E, T> TransmitErrors<'s, I, E, T>
+where
+    I: Iterator<Item = Result<T, E>>,
+{
     pub(crate) fn new(iter: I, channel: &'s std::sync::mpsc::Sender<E>) -> TransmitErrors<I, E, T> {
-        TransmitErrors {
-            _t: PhantomData,
-            iter,
-            channel,
-        }
+        TransmitErrors { iter, channel }
     }
 }
 
@@ -22,6 +23,7 @@ impl<'s, I, E, T> Iterator for TransmitErrors<'s, I, E, T>
 where
     I: Iterator<Item = Result<T, E>>,
 {
+    #[inline]
     fn next(&mut self) -> Option<T> {
         loop {
             match self.iter.next() {
@@ -38,6 +40,7 @@ where
     type Item = T;
 }
 
+// Adds the `transmit_error` to the Iterator
 pub trait TransmitErrorsExt<T, V, E>
 where
     T: Iterator<Item = Result<V, E>>,
