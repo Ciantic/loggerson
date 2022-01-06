@@ -1,7 +1,6 @@
 use derive_more::From;
-use itertools::Either;
 use itertools::Itertools;
-use iterutils::TransmitErrorsExt;
+use iterutils::SendErrorsExt;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
 use std::io::BufRead;
@@ -10,7 +9,7 @@ use std::{fs::File, io, path::Path, time::Instant};
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
-use crate::iterutils::TransmitErrorsParExt;
+use crate::iterutils::ParallelSendErrorsExt;
 use crate::models::LogEntry;
 use crate::parser::parse;
 use crate::parser::ParseError;
@@ -27,6 +26,11 @@ pub enum Error {
     LogFileIOError(io::Error),
 }
 
+#[derive(From, Debug)]
+pub enum DiagMsg {
+    Error(Error),
+}
+
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 enum ChunkMsg {
@@ -40,10 +44,10 @@ static CHUNK_QUEUE: usize = 3;
 fn main() {
     let conpool = init(".cache.db").unwrap();
     let (chunks_sender, chunks_receiver) = crossbeam_channel::bounded::<ChunkMsg>(CHUNK_QUEUE);
-    let (error_sender, error_receiver) = crossbeam_channel::unbounded();
+    let (diag_sender, diag_receiver) = crossbeam_channel::unbounded();
 
     // Parser thread
-    let parser_error_sender = error_sender.clone();
+    let parser_error_sender = diag_sender.clone();
     thread::spawn(move || {
         let lines = read_lines(".cache/access_log").unwrap();
         let line_chunks = lines.chunks(CHUNK_SIZE);
@@ -55,45 +59,39 @@ fn main() {
                 let lines = chunkedlines.collect_vec();
 
                 // Parse all rows in parallel
-                println!("Parsing a chunk {} sized {}...", chunk_n + 1, lines.len());
-                let parse_results = lines
+                let mut entries = lines
                     .into_par_iter()
-                    .transmit_errors(&parser_error_sender)
-                    .map(parse);
-
-                // Separate failures and successes
-                let (mut entries, failures): (Vec<LogEntry>, Vec<ParseError>) = parse_results
-                    .partition_map(|v| match v {
-                        Ok(v) => Either::Left(v),
-                        Err(e) => Either::Right(e),
-                    });
+                    .send_errors(&parser_error_sender) // IO Errors
+                    .map(parse)
+                    .send_errors(&parser_error_sender) // Parse errors
+                    .collect::<Vec<_>>();
 
                 // Sort by timestamp
                 entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
                 println!(
-                    "Parsed a chunk in {} ms, successes {}, failures {}.",
-                    (Instant::now() - measure).as_millis(),
+                    "Parsed a chunk {}. of size {} in {} ms.",
+                    chunk_n,
                     entries.len(),
-                    failures.len()
+                    (Instant::now() - measure).as_millis()
                 );
 
                 chunks_sender.send(ChunkMsg::Lines(entries)).unwrap();
                 Ok(())
             })
-            .transmit_errors(&parser_error_sender)
+            .send_errors(&parser_error_sender)
             .for_each(drop);
         chunks_sender.send(ChunkMsg::EndOfLines).unwrap();
     });
 
     // SQL Insert thread
-    let insert_error_sender = error_sender.clone();
+    let insert_error_sender = diag_sender.clone();
     thread::spawn(move || {
         let mut cache = BatchCache::new();
 
         // Pre-populate caches
         cache
-            .populate(&conpool.get().unwrap(), &error_sender)
+            .populate(&conpool.get().unwrap(), &diag_sender)
             .unwrap();
 
         for chunk_message in chunks_receiver {
@@ -118,7 +116,7 @@ fn main() {
     });
 
     // Listen any errors inside the batch inserts
-    for error in error_receiver {
+    for error in diag_receiver {
         println!("Error: {:?}", error);
     }
 }

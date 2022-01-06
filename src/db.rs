@@ -1,5 +1,5 @@
 use crate::{
-    iterutils::{ExtendTo, TransmitErrorsExt},
+    iterutils::{ExtendTo, SendErrorsExt},
     models::{LogEntry, Request, User, Useragent},
     Error,
 };
@@ -57,7 +57,7 @@ impl BatchCache {
                         row.get(0)?,
                     ))
                 })
-                .transmit_errors(&error_channel)
+                .send_errors(&error_channel)
                 .extend_to(&mut self.requests_cache);
         }
 
@@ -85,7 +85,7 @@ impl BatchCache {
                         row.get(0)?,
                     ))
                 })
-                .transmit_errors(&error_channel)
+                .send_errors(&error_channel)
                 .extend_to(&mut self.users_cache);
         }
 
@@ -102,7 +102,7 @@ impl BatchCache {
 
             stmt.query([])?
                 .mapped(|row| Ok((Useragent { value: row.get(1)? }, row.get(0)?)))
-                .transmit_errors(&error_channel)
+                .send_errors(&error_channel)
                 .extend_to(&mut self.useragents_cache);
         }
         Ok(())
@@ -213,7 +213,7 @@ pub fn batch_insert(
     entries
         .iter()
         .map(|entry| insert_entry(caches, &con, entry))
-        .transmit_errors(&error_channel)
+        .send_errors(&error_channel)
         .for_each(drop);
     Ok(())
 }
