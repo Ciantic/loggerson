@@ -5,7 +5,6 @@ use rayon::prelude::*;
 use std::io::BufRead;
 use std::thread;
 use std::{fs::File, io, path::Path, time::Instant};
-use utils::SendErrorsExt;
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
@@ -29,13 +28,14 @@ pub enum Error {
 #[derive(From, Debug)]
 pub enum DiagMsg {
     Error(Error),
+    RowParsed,
+    RowInserted,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 enum ChunkMsg {
     Lines(Vec<LogEntry>),
-    EndOfLines,
 }
 
 static CHUNK_SIZE: usize = 100000;
@@ -44,10 +44,10 @@ static CHUNK_QUEUE: usize = 3;
 fn main() {
     let conpool = init(".cache.db").unwrap();
     let (chunks_sender, chunks_receiver) = crossbeam_channel::bounded::<ChunkMsg>(CHUNK_QUEUE);
-    let (error_sender, error_receiver) = crossbeam_channel::unbounded::<DiagMsg>();
+    let (diag_sender, diag_receiver) = crossbeam_channel::unbounded::<DiagMsg>();
 
     // Parser thread
-    let parser_error_sender = error_sender.clone();
+    let parser_sender = diag_sender.clone();
     thread::spawn(move || {
         let lines = read_lines(".cache/access_log").unwrap();
         let line_chunks = lines.chunks(CHUNK_SIZE);
@@ -62,10 +62,10 @@ fn main() {
                 let mut entries = lines
                     .into_par_iter()
                     .map_errs(Error::LogFileIOError)
-                    .send_errors(&parser_error_sender)
+                    .send_errors(&parser_sender)
                     .map(parse)
                     .map_errs(Error::LogParseError)
-                    .send_errors(&parser_error_sender)
+                    .send_errors(&parser_sender)
                     .collect::<Vec<_>>();
 
                 // Sort by timestamp
@@ -80,17 +80,17 @@ fn main() {
 
                 chunks_sender.send(ChunkMsg::Lines(entries)).unwrap();
             });
-        chunks_sender.send(ChunkMsg::EndOfLines).unwrap();
+        println!("Ended the parser");
     });
 
     // SQL Insert thread
-    let insert_error_sender = error_sender.clone();
+    let insert_sender = diag_sender; // Move, intentionally
     thread::spawn(move || {
         let mut cache = BatchCache::new();
 
         // Pre-populate caches
         cache
-            .populate(&conpool.get().unwrap(), &error_sender)
+            .populate(&conpool.get().unwrap(), &insert_sender)
             .unwrap();
 
         for chunk_message in chunks_receiver {
@@ -101,7 +101,7 @@ fn main() {
 
                     let mut conn = conpool.get().unwrap();
                     let tx = conn.transaction().unwrap();
-                    batch_insert(&insert_error_sender, &tx, &entries, &mut cache).unwrap();
+                    batch_insert(&insert_sender, &tx, &entries, &mut cache).unwrap();
                     tx.commit().unwrap();
 
                     println!(
@@ -109,15 +109,23 @@ fn main() {
                         (Instant::now() - start_time).as_millis()
                     );
                 }
-                ChunkMsg::EndOfLines => break,
+                _ => {}
             }
         }
+        println!("Ended the chunkster");
     });
 
     // Listen any errors inside the batch inserts
-    for error in error_receiver {
-        println!("Error: {:?}", error);
+    for msg in diag_receiver {
+        match msg {
+            DiagMsg::Error(er) => {
+                println!("Error: {}", er)
+            }
+            DiagMsg::RowParsed => {}
+            DiagMsg::RowInserted => {}
+        }
     }
+    println!("Ended the program");
 }
 
 // The output is wrapped in a Result to allow matching on errors

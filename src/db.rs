@@ -208,7 +208,7 @@ fn insert_entry(
 }
 
 pub fn batch_insert(
-    error_channel: &crossbeam_channel::Sender<DiagMsg>,
+    diag_channel: &crossbeam_channel::Sender<DiagMsg>,
     con: &Connection,
     entries: &Vec<LogEntry>,
     caches: &mut BatchCache,
@@ -217,7 +217,7 @@ pub fn batch_insert(
         .iter()
         .map(|entry| insert_entry(caches, &con, entry))
         .map(|res| res.map_err(Error::SqliteError))
-        .send_errors(&error_channel)
-        .for_each(drop);
+        .send_errors(&diag_channel)
+        .for_each(|_| diag_channel.send(DiagMsg::RowInserted).unwrap());
     Ok(())
 }
