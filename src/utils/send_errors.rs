@@ -1,5 +1,7 @@
 use rayon::iter::ParallelIterator;
 
+// TODO: Simplyfy the generics, they are overqualifying
+
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 #[derive(Clone)]
 pub struct SendErrors<'s, I, M> {
@@ -12,7 +14,7 @@ where
     I: Iterator<Item = Result<T, E>>,
     M: From<E>,
 {
-    pub(crate) fn new(iter: I, channel: &'s crossbeam_channel::Sender<M>) -> SendErrors<I, M> {
+    pub(self) fn new(iter: I, channel: &'s crossbeam_channel::Sender<M>) -> SendErrors<I, M> {
         SendErrors { iter, channel }
     }
 }
@@ -132,3 +134,40 @@ where
         ParallelSendErrors::new(self, channel.clone())
     }
 }
+
+/*
+// Adds the `send_error_as` to the ParallelIterator
+pub trait ParallelSendErrorsAsExt<T, V, E, M, E2, F>
+where
+    T: ParallelIterator<Item = Result<V, E2>>,
+    M: From<E2>,
+    F: Fn(E) -> E2 + Send + Sync,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn send_errors_as(
+        self,
+        channel: &crossbeam_channel::Sender<M>,
+        f: F,
+    ) -> ParallelSendErrors<T, E2, V, M>;
+}
+
+impl<I, T, V, E, M, E2, F> ParallelSendErrorsAsExt<T, V, E, M, E2, F> for I
+where
+    I: ParallelIterator<Item = Result<V, E>>,
+    T: ParallelIterator<Item = Result<V, E2>>,
+    M: From<E2>,
+    V: Send + Sync,
+    E2: Send + Sync,
+    F: Fn(E) -> E2 + Send + Sync,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn send_errors_as(
+        self,
+        channel: &crossbeam_channel::Sender<M>,
+        f: F,
+    ) -> ParallelSendErrors<T, E2, V, M> {
+        let iter: T = self.map(|res| res.map_err(f)).into_par_iter();
+        ParallelSendErrors::new(iter, channel.clone())
+    }
+}
+ */

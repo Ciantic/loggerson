@@ -1,5 +1,7 @@
 use rayon::iter::ParallelIterator;
 
+// TODO: Simplyfy the generics, they are overqualifying
+
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 #[derive(Clone)]
 pub struct ParallelMapErrs<I, F> {
