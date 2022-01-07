@@ -10,9 +10,20 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 #[derive(Debug)]
-pub enum ParseError {
-    // TODO: Granular errors...
-    ParsingError,
+pub struct ParseError(String);
+
+impl ParseError {
+    pub fn new(line: impl AsRef<str>) -> Self {
+        ParseError(line.as_ref().to_owned())
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unable to parse line '{}'", self.0)
+    }
 }
 
 // https://httpd.apache.org/docs/2.4/logs.html
@@ -24,7 +35,6 @@ static COMBINED_LOG_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 pub fn parse(line: String) -> Result<LogEntry, ParseError> {
-    use ParseError::*;
     if let Some(captures) = COMBINED_LOG_REGEX.captures(&line) {
         if let (
             Some(ipmatch),
@@ -47,10 +57,10 @@ pub fn parse(line: String) -> Result<LogEntry, ParseError> {
             captures.name("referrer"),
             captures.name("useragent"),
         ) {
-            let ip = IpAddr::from_str(ipmatch.as_str()).map_err(|_| ParsingError)?;
+            let ip = IpAddr::from_str(ipmatch.as_str()).map_err(|_| ParseError::new(&line))?;
             let dtime =
                 chrono::DateTime::parse_from_str(datematch.as_str(), "%d/%b/%Y:%H:%M:%S %z")
-                    .map_err(|_| ParsingError)?;
+                    .map_err(|_| ParseError::new(&line))?;
             let method = methodmatch.as_str();
             let url = urlmatch.as_str();
             let useragent = useragentmatch.as_str();
@@ -58,7 +68,7 @@ pub fn parse(line: String) -> Result<LogEntry, ParseError> {
             let status = statusmatch
                 .as_str()
                 .parse::<i32>()
-                .map_err(|_| ParsingError)?;
+                .map_err(|_| ParseError::new(&line))?;
 
             let mut hasher = Sha256::new();
             hasher.update(ip.to_string());
@@ -90,10 +100,10 @@ pub fn parse(line: String) -> Result<LogEntry, ParseError> {
             })
         } else {
             // println!("Parsing row failed 1 {}", &line);
-            Err(ParsingError)
+            Err(ParseError::new(line))
         }
     } else {
         // println!("Parsing row failed 2 {}", &line);
-        Err(ParsingError)
+        Err(ParseError::new(line))
     }
 }
