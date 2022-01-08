@@ -60,7 +60,6 @@ fn parser_thread(diag_sender: Sender<DiagMsg>, chunks_sender: Sender<ChunkMsg>) 
         .into_iter()
         // .enumerate()
         .for_each(|chunkedlines| -> () {
-            let measure = Instant::now();
             let lines = chunkedlines.collect_vec();
 
             // Parse all rows in parallel
