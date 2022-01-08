@@ -1,7 +1,7 @@
 use crate::{
     models::{LogEntry, Request, User, Useragent},
     utils::{ExtendTo, SendErrorsExt},
-    DiagMsg, Error,
+    Error, Msg,
 };
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -36,7 +36,7 @@ impl BatchCache {
     pub fn populate(
         &mut self,
         con: &Connection,
-        error_channel: &crossbeam_channel::Sender<DiagMsg>,
+        error_channel: &crossbeam_channel::Sender<Msg>,
     ) -> rusqlite::Result<()> {
         {
             // Update requests cache
@@ -208,7 +208,7 @@ fn insert_entry(
 }
 
 pub fn batch_insert(
-    diag_channel: &crossbeam_channel::Sender<DiagMsg>,
+    msg_sender: &crossbeam_channel::Sender<Msg>,
     con: &Connection,
     entries: &Vec<LogEntry>,
     caches: &mut BatchCache,
@@ -217,7 +217,7 @@ pub fn batch_insert(
         .iter()
         .map(|entry| insert_entry(caches, &con, entry))
         .map(|res| res.map_err(Error::SqliteError))
-        .send_errors(&diag_channel)
-        .for_each(|_| diag_channel.send(DiagMsg::RowInserted).unwrap());
+        .send_errors(&msg_sender)
+        .for_each(|_| msg_sender.send(Msg::RowInserted).unwrap());
     Ok(())
 }
