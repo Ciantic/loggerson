@@ -53,6 +53,20 @@ struct DrawState {
     ended: Option<Instant>,
 }
 
+impl DrawState {
+    fn new() -> Self {
+        Self {
+            insert_errors: 0,
+            insertted: 0,
+            // last_errors: None,
+            parse_errors: 0,
+            parsed: 0,
+            started: Instant::now(),
+            ended: None,
+        }
+    }
+}
+
 static CHUNK_SIZE: usize = 100000;
 static CHUNK_QUEUE: usize = 3;
 
@@ -152,17 +166,8 @@ fn draw_thread(draw_receiver: Receiver<DrawState>) {
 }
 
 fn diag_thread(diag_receiver: Receiver<DiagMsg>, draw_sender: Sender<DrawState>) {
-    let started = Instant::now();
     let mut last_draw = Instant::now();
-    let mut draw_state = DrawState {
-        insert_errors: 0,
-        insertted: 0,
-        // last_errors: None,
-        parse_errors: 0,
-        parsed: 0,
-        started,
-        ended: None,
-    };
+    let mut draw_state = DrawState::new();
 
     let mut send_draw = move || -> bool {
         let now = Instant::now();
