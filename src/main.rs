@@ -31,7 +31,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(From, Debug)]
 pub enum DiagMsg {
     Error(Error),
-    RowsParsed(usize),
+    RowParsed,
     RowInserted,
 }
 
@@ -72,7 +72,7 @@ fn parser_thread(diag_sender: Sender<DiagMsg>, chunks_sender: Sender<ChunkMsg>) 
                 .map_errs(Error::LogParseError)
                 .send_errors(&diag_sender)
                 .map(|e| {
-                    diag_sender.send(DiagMsg::RowsParsed(1)).unwrap();
+                    diag_sender.send(DiagMsg::RowParsed).unwrap();
                     e
                 })
                 .collect::<Vec<_>>();
@@ -146,7 +146,7 @@ fn diag_thread(started: Instant, diag_receiver: Receiver<DiagMsg>, draw_sender: 
     for msg in diag_receiver {
         match msg {
             DiagMsg::RowInserted => draw_state.insertted += 1,
-            DiagMsg::RowsParsed(n) => draw_state.parsed += n,
+            DiagMsg::RowParsed => draw_state.parsed += 1,
             DiagMsg::Error(err) => match err {
                 Error::LogFileIOError(_) => {}
                 Error::LogParseError(_) => draw_state.parse_errors += 1,
