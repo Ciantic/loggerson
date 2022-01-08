@@ -4,6 +4,8 @@ use itertools::Itertools;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
 use std::io::{BufRead, BufReader, Write};
+use std::ops::DerefMut;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 use std::{fs::File, io, time::Instant};
@@ -49,8 +51,9 @@ struct DrawState {
     parsed: usize,
     insert_errors: usize,
     insertted: usize,
-    started: Instant, // last_errors: Option<[String; 3]>,
+    started: Instant,
     ended: Option<Instant>,
+    // errors: Arc<RwLock<Vec<Error>>>,
 }
 
 impl DrawState {
@@ -63,12 +66,14 @@ impl DrawState {
             parsed: 0,
             started: Instant::now(),
             ended: None,
+            // errors: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
 
 static CHUNK_SIZE: usize = 100000;
 static CHUNK_QUEUE: usize = 3;
+static TERMINAL_MS_PER_FRAME: u128 = 30; // Approx ~33 fps (1000 / 33 = 30ms per frame)
 
 /// This application is made of four threads, with following data flow:
 ///
@@ -171,7 +176,7 @@ fn diag_thread(diag_receiver: Receiver<DiagMsg>, draw_sender: Sender<DrawState>)
 
     let mut send_draw = move || -> bool {
         let now = Instant::now();
-        if (now - last_draw).as_millis() > 100 {
+        if (now - last_draw).as_millis() > TERMINAL_MS_PER_FRAME {
             last_draw = now;
             true
         } else {
@@ -181,15 +186,18 @@ fn diag_thread(diag_receiver: Receiver<DiagMsg>, draw_sender: Sender<DrawState>)
 
     loop {
         use crossbeam_channel::RecvTimeoutError::*;
-        match diag_receiver.recv_timeout(Duration::from_millis(101)) {
+        match diag_receiver.recv_timeout(Duration::from_millis(TERMINAL_MS_PER_FRAME as u64)) {
             Ok(msg) => match msg {
                 DiagMsg::RowInserted => draw_state.insertted += 1,
                 DiagMsg::RowParsed => draw_state.parsed += 1,
-                DiagMsg::Error(err) => match err {
-                    Error::LogFileIOError(_) => {}
-                    Error::LogParseError(_) => draw_state.parse_errors += 1,
-                    Error::SqliteError(_) => draw_state.insert_errors += 1,
-                },
+                DiagMsg::Error(err) => {
+                    match err {
+                        Error::LogFileIOError(_) => {}
+                        Error::LogParseError(_) => draw_state.parse_errors += 1,
+                        Error::SqliteError(_) => draw_state.insert_errors += 1,
+                    }
+                    // draw_state.errors.write().unwrap().push(err);
+                }
                 DiagMsg::AllParsingDone => {}
                 DiagMsg::AllInsertDone => {}
             },
