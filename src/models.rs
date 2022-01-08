@@ -22,5 +22,10 @@ pub struct LogEntry {
     pub timestamp: i64,
     pub request: Request,
     pub user: User,
-    // TODO: Referrer struct
+    pub referrer: Option<Referrer>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Referrer {
+    pub url: String,
 }

@@ -1,4 +1,5 @@
 use crate::models::LogEntry;
+use crate::models::Referrer;
 use crate::models::Request;
 use crate::models::User;
 use crate::models::Useragent;
@@ -64,7 +65,9 @@ pub fn parse(line: String) -> Result<LogEntry, ParseError> {
             let method = methodmatch.as_str();
             let url = urlmatch.as_str();
             let useragent = useragentmatch.as_str();
-            let _referrer = referrermatch.as_str();
+            let referrer = (referrermatch.as_str() != "-").then(|| Referrer {
+                url: referrermatch.as_str().to_owned(),
+            });
             let status = statusmatch
                 .as_str()
                 .parse::<i32>()
@@ -97,6 +100,7 @@ pub fn parse(line: String) -> Result<LogEntry, ParseError> {
                     status_code: status,
                     url: url.to_owned(),
                 },
+                referrer: referrer,
             })
         } else {
             // println!("Parsing row failed 1 {}", &line);

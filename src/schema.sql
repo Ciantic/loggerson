@@ -14,12 +14,14 @@ CREATE TABLE IF NOT EXISTS entrys (
   timestamp       BIG INT         NOT NULL,
   request_id      INTEGER         NOT NULL,
   user_id         INTEGER         NOT NULL,
+  -- referrer is intentionally nullable
+  referrer_id     INTEGER,        
   FOREIGN KEY (request_id) REFERENCES requests(id),
   FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (referrer_id) REFERENCES referrers(id),
   UNIQUE (timestamp, request_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS entrys_cols ON entrys(timestamp, request_id, user_id);
-
 
 CREATE TABLE IF NOT EXISTS requests (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,3 +49,15 @@ CREATE TABLE IF NOT EXISTS useragents (
   value      VARCHAR(2048)      NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS useragents_value ON useragents(value);
+
+CREATE TABLE IF NOT EXISTS referrers (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  url             VARCHAR(2048)     NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS referrer_url ON referrers(url);
+
+CREATE TABLE IF NOT EXISTS countries (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  code            VARCHAR(2)      NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS country_code ON countries(code);

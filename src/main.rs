@@ -48,6 +48,7 @@ struct DrawState {
     parsed: usize,
     insert_errors: usize,
     insertted: usize,
+    drawed: Instant,
     started: Instant,
     ended: Option<Instant>,
     // errors: Arc<RwLock<Vec<Error>>>,
@@ -62,6 +63,7 @@ impl DrawState {
             parse_errors: 0,
             parsed: 0,
             started: Instant::now(),
+            drawed: Instant::now(),
             ended: None,
             // errors: Arc::new(RwLock::new(Vec::new())),
         }
@@ -147,13 +149,12 @@ fn sql_insert_thread(msg_sender: Sender<Msg>, chunks_receiver: Receiver<ChunkMsg
 }
 
 fn msg_thread(msg_receiver: Receiver<Msg>) {
-    let mut last_draw = Instant::now();
     let mut draw_state = DrawState::new();
 
     let mut send_draw = move || -> bool {
         let now = Instant::now();
-        if (now - last_draw).as_millis() > TERMINAL_MS_PER_FRAME {
-            last_draw = now;
+        if (now - draw_state.drawed).as_millis() > TERMINAL_MS_PER_FRAME {
+            draw_state.drawed = now;
             true
         } else {
             false
