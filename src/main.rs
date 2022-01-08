@@ -95,8 +95,6 @@ fn sql_insert_thread(diag_sender: Sender<DiagMsg>, chunks_receiver: Receiver<Chu
     for chunk_message in chunks_receiver {
         match chunk_message {
             ChunkMsg::Lines(entries) => {
-                let start_time = Instant::now();
-
                 let mut conn = conpool.get().unwrap();
                 let tx = conn.transaction().unwrap();
                 batch_insert(&diag_sender, &tx, &entries, &mut cache).unwrap();
