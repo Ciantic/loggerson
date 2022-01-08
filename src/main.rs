@@ -33,6 +33,8 @@ pub enum DiagMsg {
     Error(Error),
     RowParsed,
     RowInserted,
+    AllParsingDone,
+    AllInsertDone,
 }
 
 #[derive(From, Debug)]
@@ -81,6 +83,7 @@ fn parser_thread(diag_sender: Sender<DiagMsg>, chunks_sender: Sender<ChunkMsg>) 
 
             chunks_sender.send(ChunkMsg::Lines(entries)).unwrap();
         });
+    diag_sender.send(DiagMsg::AllParsingDone).unwrap();
 }
 
 fn sql_insert_thread(diag_sender: Sender<DiagMsg>, chunks_receiver: Receiver<ChunkMsg>) {
@@ -102,9 +105,11 @@ fn sql_insert_thread(diag_sender: Sender<DiagMsg>, chunks_receiver: Receiver<Chu
             }
         }
     }
+    diag_sender.send(DiagMsg::AllInsertDone).unwrap();
 }
 
 fn draw_thread(draw_receiver: Receiver<DrawState>) {
+    println!("");
     for state in draw_receiver {
         print!(
             "\rParsed {}, parse errors: {}. Inserted {}, insert errors {}.",
@@ -149,11 +154,14 @@ fn diag_thread(started: Instant, diag_receiver: Receiver<DiagMsg>, draw_sender: 
                 Error::LogParseError(_) => draw_state.parse_errors += 1,
                 Error::SqliteError(_) => draw_state.insert_errors += 1,
             },
+            DiagMsg::AllParsingDone => {}
+            DiagMsg::AllInsertDone => {}
         }
         if send_draw() {
             draw_sender.send(draw_state.clone()).unwrap();
         }
     }
+
     draw_state.ended = Some(Instant::now());
     draw_sender.send(draw_state).unwrap();
 }
@@ -162,20 +170,20 @@ fn main() {
     let started = Instant::now();
     let (chunks_sender, chunks_receiver) = crossbeam_channel::bounded::<ChunkMsg>(CHUNK_QUEUE);
     let (diag_sender, diag_receiver) = crossbeam_channel::unbounded::<DiagMsg>();
-    let (draw_sender, draw_receiver) = crossbeam_channel::unbounded::<DrawState>();
+    let (draw_sender, draw_receiver) = crossbeam_channel::bounded::<DrawState>(0);
 
     // Parser thread
     let diag_sender_for_parser = diag_sender.clone();
     thread::spawn(move || parser_thread(diag_sender_for_parser, chunks_sender));
 
-    // SQL Insert thread, move the diag sender as this is last thread
+    // SQL Insert thread
     thread::spawn(move || sql_insert_thread(diag_sender, chunks_receiver));
 
-    // Drawing thread
-    thread::spawn(move || draw_thread(draw_receiver));
+    // Diagnostic thread
+    thread::spawn(move || diag_thread(started, diag_receiver, draw_sender));
 
-    // Main diagnostic thread
-    diag_thread(started, diag_receiver, draw_sender);
+    // Draw thread as main thread
+    draw_thread(draw_receiver)
 }
 
 // The output is wrapped in a Result to allow matching on errors
