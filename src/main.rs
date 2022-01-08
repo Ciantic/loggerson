@@ -3,9 +3,10 @@ use derive_more::{Display, Error, From};
 use itertools::Itertools;
 use rayon::prelude::ParallelIterator;
 use rayon::prelude::*;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::thread;
-use std::{fs::File, io, path::Path, time::Instant};
+use std::time::Duration;
+use std::{fs::File, io, time::Instant};
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
@@ -55,34 +56,61 @@ struct DrawState {
 static CHUNK_SIZE: usize = 100000;
 static CHUNK_QUEUE: usize = 3;
 
+/// This application is made of four threads, with following data flow:
+///
+/// * Parser -> SQL Insert
+/// * Parser -> Diagnostic
+/// * SQL Insert -> Diagnostic
+/// * Diagnostic -> Draw (main thread)
+///
+/// Additionally the Parser creates worker threads with Rayon. Each thread
+/// should exit gracefully.
+fn main() {
+    let (chunks_sender, chunks_receiver) = crossbeam_channel::bounded::<ChunkMsg>(CHUNK_QUEUE);
+    let (diag_sender, diag_receiver) = crossbeam_channel::unbounded::<DiagMsg>();
+    let (draw_sender, draw_receiver) = crossbeam_channel::unbounded::<DrawState>();
+
+    // Parser thread
+    let diag_sender_for_parser = diag_sender.clone();
+    thread::spawn(move || parser_thread(diag_sender_for_parser, chunks_sender));
+
+    // SQL Insert thread
+    thread::spawn(move || sql_insert_thread(diag_sender, chunks_receiver));
+
+    // Diagnostic thread
+    thread::spawn(move || diag_thread(diag_receiver, draw_sender));
+
+    // Draw thread as main thread
+    draw_thread(draw_receiver)
+}
+
 fn parser_thread(diag_sender: Sender<DiagMsg>, chunks_sender: Sender<ChunkMsg>) {
-    let lines = read_lines(".cache/access_log").unwrap();
+    let file = File::open(".cache/access_log").unwrap();
+    let lines = BufReader::new(file).lines();
     let line_chunks = lines.chunks(CHUNK_SIZE);
-    line_chunks
-        .into_iter()
-        // .enumerate()
-        .for_each(|chunkedlines| -> () {
-            let lines = chunkedlines.collect_vec();
 
-            // Parse all rows in parallel
-            let mut entries = lines
-                .into_par_iter()
-                .map_errs(Error::LogFileIOError)
-                .send_errors(&diag_sender)
-                .map(parse)
-                .map_errs(Error::LogParseError)
-                .send_errors(&diag_sender)
-                .map(|e| {
-                    diag_sender.send(DiagMsg::RowParsed).unwrap();
-                    e
-                })
-                .collect::<Vec<_>>();
+    line_chunks.into_iter().for_each(|chunkedlines| -> () {
+        let lines = chunkedlines.collect_vec();
 
-            // Sort by timestamp
-            entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        // Parse all rows in parallel
+        let mut entries = lines
+            .into_par_iter()
+            .map_errs(Error::LogFileIOError)
+            .send_errors(&diag_sender)
+            .map(parse)
+            .map_errs(Error::LogParseError)
+            .send_errors(&diag_sender)
+            .map(|e| {
+                diag_sender.send(DiagMsg::RowParsed).unwrap();
+                e
+            })
+            .collect::<Vec<_>>();
 
-            chunks_sender.send(ChunkMsg::Lines(entries)).unwrap();
-        });
+        // Sort by timestamp
+        entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
+        chunks_sender.send(ChunkMsg::Lines(entries)).unwrap();
+    });
     diag_sender.send(DiagMsg::AllParsingDone).unwrap();
 }
 
@@ -123,7 +151,8 @@ fn draw_thread(draw_receiver: Receiver<DrawState>) {
     }
 }
 
-fn diag_thread(started: Instant, diag_receiver: Receiver<DiagMsg>, draw_sender: Sender<DrawState>) {
+fn diag_thread(diag_receiver: Receiver<DiagMsg>, draw_sender: Sender<DrawState>) {
+    let started = Instant::now();
     let mut last_draw = Instant::now();
     let mut draw_state = DrawState {
         insert_errors: 0,
@@ -145,18 +174,24 @@ fn diag_thread(started: Instant, diag_receiver: Receiver<DiagMsg>, draw_sender: 
         }
     };
 
-    for msg in diag_receiver {
-        match msg {
-            DiagMsg::RowInserted => draw_state.insertted += 1,
-            DiagMsg::RowParsed => draw_state.parsed += 1,
-            DiagMsg::Error(err) => match err {
-                Error::LogFileIOError(_) => {}
-                Error::LogParseError(_) => draw_state.parse_errors += 1,
-                Error::SqliteError(_) => draw_state.insert_errors += 1,
+    loop {
+        use crossbeam_channel::RecvTimeoutError::*;
+        match diag_receiver.recv_timeout(Duration::from_millis(101)) {
+            Ok(msg) => match msg {
+                DiagMsg::RowInserted => draw_state.insertted += 1,
+                DiagMsg::RowParsed => draw_state.parsed += 1,
+                DiagMsg::Error(err) => match err {
+                    Error::LogFileIOError(_) => {}
+                    Error::LogParseError(_) => draw_state.parse_errors += 1,
+                    Error::SqliteError(_) => draw_state.insert_errors += 1,
+                },
+                DiagMsg::AllParsingDone => {}
+                DiagMsg::AllInsertDone => {}
             },
-            DiagMsg::AllParsingDone => {}
-            DiagMsg::AllInsertDone => {}
+            Err(Disconnected) => break,
+            Err(Timeout) => (),
         }
+
         if send_draw() {
             draw_sender.send(draw_state.clone()).unwrap();
         }
@@ -164,34 +199,4 @@ fn diag_thread(started: Instant, diag_receiver: Receiver<DiagMsg>, draw_sender: 
 
     draw_state.ended = Some(Instant::now());
     draw_sender.send(draw_state).unwrap();
-}
-
-fn main() {
-    let started = Instant::now();
-    let (chunks_sender, chunks_receiver) = crossbeam_channel::bounded::<ChunkMsg>(CHUNK_QUEUE);
-    let (diag_sender, diag_receiver) = crossbeam_channel::unbounded::<DiagMsg>();
-    let (draw_sender, draw_receiver) = crossbeam_channel::bounded::<DrawState>(0);
-
-    // Parser thread
-    let diag_sender_for_parser = diag_sender.clone();
-    thread::spawn(move || parser_thread(diag_sender_for_parser, chunks_sender));
-
-    // SQL Insert thread
-    thread::spawn(move || sql_insert_thread(diag_sender, chunks_receiver));
-
-    // Diagnostic thread
-    thread::spawn(move || diag_thread(started, diag_receiver, draw_sender));
-
-    // Draw thread as main thread
-    draw_thread(draw_receiver)
-}
-
-// The output is wrapped in a Result to allow matching on errors
-// Returns an Iterator to the Reader of the lines of the file.
-fn read_lines<P>(filename: P) -> std::io::Result<std::io::Lines<std::io::BufReader<File>>>
-where
-    P: AsRef<Path>,
-{
-    let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
 }
