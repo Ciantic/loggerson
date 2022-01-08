@@ -155,21 +155,6 @@ fn sql_insert_thread(diag_sender: Sender<DiagMsg>, chunks_receiver: Receiver<Chu
     diag_sender.send(DiagMsg::AllInsertDone).unwrap();
 }
 
-fn draw_thread(draw_receiver: Receiver<DrawState>) {
-    println!("");
-    for state in draw_receiver {
-        print!(
-            "\rParsed {}, parse errors: {}. Inserted {}, insert errors {}.",
-            state.parsed, state.parse_errors, state.insertted, state.insert_errors
-        );
-        let _ = io::stdout().flush();
-        if let Some(ended) = state.ended {
-            println!("");
-            println!("Done in {} ms.", (ended - state.started).as_millis());
-        }
-    }
-}
-
 fn diag_thread(diag_receiver: Receiver<DiagMsg>, draw_sender: Sender<DrawState>) {
     let mut last_draw = Instant::now();
     let mut draw_state = DrawState::new();
@@ -212,4 +197,19 @@ fn diag_thread(diag_receiver: Receiver<DiagMsg>, draw_sender: Sender<DrawState>)
 
     draw_state.ended = Some(Instant::now());
     draw_sender.send(draw_state).unwrap();
+}
+
+fn draw_thread(draw_receiver: Receiver<DrawState>) {
+    println!("");
+    for state in draw_receiver {
+        print!(
+            "\rParsed {}, parse errors: {}. Inserted {}, insert errors {}.",
+            state.parsed, state.parse_errors, state.insertted, state.insert_errors
+        );
+        let _ = io::stdout().flush();
+        if let Some(ended) = state.ended {
+            println!("");
+            println!("Done in {} ms.", (ended - state.started).as_millis());
+        }
+    }
 }
