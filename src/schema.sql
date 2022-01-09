@@ -11,7 +11,7 @@
 
 CREATE TABLE IF NOT EXISTS entrys (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  timestamp       BIG INT         NOT NULL,
+  timestamp       BIGINT          NOT NULL,
   request_id      INTEGER         NOT NULL,
   user_id         INTEGER         NOT NULL,
   -- referrer is intentionally nullable
@@ -25,8 +25,8 @@ CREATE INDEX IF NOT EXISTS entrys_cols ON entrys(timestamp, request_id, user_id)
 
 CREATE TABLE IF NOT EXISTS requests (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  method          VARCHAR(7)      NOT NULL,
-  url             VARCHAR(2048)   NOT NULL,
+  method          TEXT      NOT NULL,
+  url             TEXT   NOT NULL,
   status_code     INTEGER         NOT NULL,
   UNIQUE (method, url, status_code)
 );
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
 
   -- hash intentionally allows NULL, so you can forget the user hash
-  hash            VARCHAR(64)    UNIQUE,
+  hash            BIGINT UNIQUE,
 
   -- useragent_id intentionally allows NULL, so you can forget the useragent
   useragent_id    INTEGER,
@@ -46,18 +46,18 @@ CREATE INDEX IF NOT EXISTS users_cols ON users(hash, useragent_id);
 
 CREATE TABLE IF NOT EXISTS useragents (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  value      VARCHAR(2048)      NOT NULL UNIQUE
+  value           TEXT    NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS useragents_value ON useragents(value);
 
 CREATE TABLE IF NOT EXISTS referrers (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  url             VARCHAR(2048)     NOT NULL UNIQUE
+  url             TEXT     NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS referrer_url ON referrers(url);
 
 CREATE TABLE IF NOT EXISTS countries (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  code            VARCHAR(2)      NOT NULL UNIQUE
+  code            TEXT      NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS country_code ON countries(code);

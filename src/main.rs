@@ -42,7 +42,7 @@ enum ChunkMsg {
     Lines(Vec<LogEntry>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct DrawState {
     parse_errors: usize,
     parsed: usize,
@@ -51,7 +51,7 @@ struct DrawState {
     drawed: Instant,
     started: Instant,
     ended: Option<Instant>,
-    // errors: Arc<RwLock<Vec<Error>>>,
+    // errors: Vec<Error>,
 }
 
 impl DrawState {
@@ -65,7 +65,7 @@ impl DrawState {
             started: Instant::now(),
             drawed: Instant::now(),
             ended: None,
-            // errors: Arc::new(RwLock::new(Vec::new())),
+            // errors: Vec::new(),
         }
     }
 }
@@ -173,7 +173,8 @@ fn msg_thread(msg_receiver: Receiver<Msg>) {
                         Error::LogParseError(_) => draw_state.parse_errors += 1,
                         Error::SqliteError(_) => draw_state.insert_errors += 1,
                     }
-                    // draw_state.errors.write().unwrap().push(err);
+                    // println!("err {}", err);
+                    // draw_state.errors.push(err);
                 }
                 Msg::AllParsingDone => {}
                 Msg::AllInsertDone => {}

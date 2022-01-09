@@ -3,10 +3,9 @@ use crate::models::Referrer;
 use crate::models::Request;
 use crate::models::User;
 use crate::models::Useragent;
+use md5::compute as md5;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use sha2::{Digest, Sha256};
-use std::fmt::Write;
 use std::net::IpAddr;
 use std::str::FromStr;
 
@@ -62,45 +61,40 @@ pub fn parse(line: String) -> Result<LogEntry, ParseError> {
             let dtime =
                 chrono::DateTime::parse_from_str(datematch.as_str(), "%d/%b/%Y:%H:%M:%S %z")
                     .map_err(|_| ParseError::new(&line))?;
-            let method = methodmatch.as_str();
-            let url = urlmatch.as_str();
-            let useragent = useragentmatch.as_str();
+            let method = methodmatch.as_str().to_owned();
+            let url = urlmatch.as_str().to_owned();
+            let useragent = (useragentmatch.as_str() != "-").then(|| Useragent {
+                value: useragentmatch.as_str().to_owned(),
+            });
             let referrer = (referrermatch.as_str() != "-").then(|| Referrer {
                 url: referrermatch.as_str().to_owned(),
             });
-            let status = statusmatch
+            let status_code = statusmatch
                 .as_str()
                 .parse::<i32>()
                 .map_err(|_| ParseError::new(&line))?;
 
-            let mut hasher = Sha256::new();
-            hasher.update(ip.to_string());
-            hasher.update(&useragent);
-            let hashbytes = hasher.finalize();
-            let mut hash = String::with_capacity(32);
-            for &b in hashbytes.as_slice() {
-                write!(&mut hash, "{:02x}", b).unwrap();
-            }
-
-            /*
-            let mut hash = [0u8; 32];
-            hash.copy_from_slice(&hashbytes);
-            */
+            // Truncate hash, and use bad hasher (which has known collisions
+            // like md5), to make pin-pointing a user somewhat difficult. Since
+            // the hash includes useragent there can be inifinite amount of
+            // collisions if useragent list is cleaned periodically.
+            let hash_bytes: [u8; 16] = md5(ip.to_string() + useragentmatch.as_str()).into();
+            let mut hash_64b: [u8; 8] = [0; 8];
+            hash_64b.copy_from_slice(&hash_bytes[0..8]);
+            let hash = i64::from_le_bytes(hash_64b);
 
             Ok(LogEntry {
                 timestamp: dtime.timestamp(),
                 user: User {
                     hash: Some(hash),
-                    useragent: Some(Useragent {
-                        value: useragent.to_owned(),
-                    }),
+                    useragent,
                 },
                 request: Request {
-                    method: method.to_owned(),
-                    status_code: status,
-                    url: url.to_owned(),
+                    method,
+                    status_code,
+                    url,
                 },
-                referrer: referrer,
+                referrer,
             })
         } else {
             // println!("Parsing row failed 1 {}", &line);

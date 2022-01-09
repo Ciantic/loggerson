@@ -15,9 +15,9 @@ pub fn init(path: &str) -> Result<Pool<SqliteConnectionManager>, rusqlite::Error
     let manager = SqliteConnectionManager::file(path);
     let pool = r2d2::Pool::new(manager).unwrap();
     let conn = pool.get().unwrap();
-    // let _ = conn
-    //     .query_row("PRAGMA journal_mode = WAL", [], |_row| Ok(()))
-    //     .unwrap();
+    let _ = conn
+        .query_row("PRAGMA journal_mode = WAL", [], |_row| Ok(()))
+        .unwrap();
     conn.execute_batch(SCHEMA)?;
     Ok(pool)
 }
@@ -76,17 +76,18 @@ impl BatchCache {
                     u.id as user_id, 
                     u.hash as user_hash, 
                     ua.value as useragent_value
-                FROM users u, useragents ua 
-                WHERE u.useragent_id = ua.id 
+                FROM users u LEFT JOIN useragents ua 
+                ON u.useragent_id = ua.id
                 ",
             )?;
 
             stmt.query([])?
                 .mapped(|row| {
+                    let ua: Option<String> = row.get(2)?;
                     Ok((
                         User {
                             hash: row.get(1)?,
-                            useragent: Some(Useragent { value: row.get(2)? }),
+                            useragent: ua.map(|value| Useragent { value }),
                         },
                         row.get(0)?,
                     ))
@@ -160,7 +161,7 @@ fn insert_request(
     Ok(request_id)
 }
 
-fn inser_useragent(
+fn insert_useragent(
     caches: &mut BatchCache,
     con: &Connection,
     object: &Useragent,
@@ -191,8 +192,13 @@ fn insert_user(caches: &mut BatchCache, con: &Connection, object: &User) -> rusq
     if let Some(request_id) = caches.users_cache.get(object) {
         return Ok(request_id.to_owned());
     }
-    // TODO: Remove unwrap
-    let useragent_id = inser_useragent(caches, &con, &object.useragent.clone().unwrap())?;
+
+    let useragent_id = object
+        .useragent
+        .as_ref()
+        .map(|v| insert_useragent(caches, &con, &v))
+        .transpose()?;
+
     let mut stmt = con.prepare_cached(
         "
             INSERT INTO
@@ -304,7 +310,7 @@ mod tests {
                     status_code: 300,
                 },
                 user: User {
-                    hash: Some("123".to_owned()),
+                    hash: Some(123),
                     useragent: Some(Useragent {
                         value: "Foo".to_owned(),
                     }),
@@ -319,24 +325,29 @@ mod tests {
         let mut stmt = con
             .prepare(
                 "
-                SELECT e.timestamp, u.hash, r.method, r.url, r.status_code, ua.value as useragent, rr.url as referrer_url FROM 
-                entrys e, 
-                requests r, 
-                users u, 
-                useragents ua, 
-                referrers rr
+                SELECT 
+                    e.timestamp, u.hash, 
+                    r.method, r.url, r.status_code, 
+                    ua.value as useragent, 
+                    rr.url as referrer_url 
+                FROM 
+                    entrys e, 
+                    requests r, 
+                    users u, 
+                    useragents ua, 
+                    referrers rr
                 WHERE
-                e.request_id = r.id AND
-                e.user_id = u.id AND
-                e.referrer_id = rr.id AND
-                u.useragent_id = ua.id
+                    e.request_id = r.id AND
+                    e.user_id = u.id AND
+                    e.referrer_id = rr.id AND
+                    u.useragent_id = ua.id
             ",
             )
             .unwrap();
 
         let rows = stmt
             .query_map([], |f| {
-                let values: (i64, String, String, String, i32, String, String) = (
+                let values: (i64, i64, String, String, i32, String, String) = (
                     f.get(0)?,
                     f.get(1)?,
                     f.get(2)?,
@@ -353,7 +364,7 @@ mod tests {
         assert_eq!(
             vec![(
                 100,
-                "123".to_owned(),
+                123,
                 "GET".to_owned(),
                 "https://example.com".to_owned(),
                 300,
@@ -362,5 +373,28 @@ mod tests {
             )],
             rows
         );
+    }
+    #[test]
+    fn test_insert_entry_nulls() {
+        let con = init(":memory:").unwrap().get().unwrap();
+        let mut caches = BatchCache::new();
+        insert_entry(
+            &mut caches,
+            &con,
+            &LogEntry {
+                timestamp: 100,
+                request: Request {
+                    method: "GET".to_owned(),
+                    url: "https://example.com".to_owned(),
+                    status_code: 300,
+                },
+                user: User {
+                    hash: Some(123),
+                    useragent: None,
+                },
+                referrer: None,
+            },
+        )
+        .unwrap();
     }
 }

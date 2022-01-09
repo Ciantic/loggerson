@@ -7,7 +7,7 @@ pub struct Request {
 
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub struct User {
-    pub hash: Option<String>,
+    pub hash: Option<i64>,
     pub useragent: Option<Useragent>,
     // TODO: Country struct
 }
