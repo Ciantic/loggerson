@@ -1,12 +1,12 @@
 use crate::{
     models::{LogEntry, Referrer, Request, User, Useragent},
-    utils::{ExtendTo, MapErrsExt, SendErrorsExt},
+    utils::{ExtendTo, SendErrorsAsExt, SendErrorsExt},
     Msg,
 };
 use derive_more::From;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{ffi::SQLITE_CONSTRAINT, params, Connection, ErrorCode};
+use rusqlite::{params, Connection, ErrorCode};
 use std::collections::HashMap;
 
 const SCHEMA: &str = include_str!("schema.sql");
@@ -71,8 +71,7 @@ impl BatchCache {
                         row.get(0)?,
                     ))
                 })
-                .map_errs(DbError::SqliteError)
-                .send_errors(&error_channel)
+                .send_errors_as(&error_channel, DbError::SqliteError)
                 .extend_to(&mut self.requests_cache);
         }
 
@@ -101,8 +100,7 @@ impl BatchCache {
                         row.get(0)?,
                     ))
                 })
-                .map_errs(DbError::SqliteError)
-                .send_errors(&error_channel)
+                .send_errors_as(&error_channel, DbError::SqliteError)
                 .extend_to(&mut self.users_cache);
         }
 
@@ -119,8 +117,7 @@ impl BatchCache {
 
             stmt.query([])?
                 .mapped(|row| Ok((Useragent { value: row.get(1)? }, row.get(0)?)))
-                .map_errs(DbError::SqliteError)
-                .send_errors(&error_channel)
+                .send_errors_as(&error_channel, DbError::SqliteError)
                 .extend_to(&mut self.useragents_cache);
         }
 
@@ -137,8 +134,7 @@ impl BatchCache {
 
             stmt.query([])?
                 .mapped(|row| Ok((Referrer { url: row.get(1)? }, row.get(0)?)))
-                .map_errs(DbError::SqliteError)
-                .send_errors(&error_channel)
+                .send_errors_as(&error_channel, DbError::SqliteError)
                 .extend_to(&mut self.referrer_cache);
         }
         Ok(())

@@ -6,14 +6,13 @@ use std::io::{BufRead, BufReader, Write};
 use std::thread;
 use std::time::Duration;
 use std::{fs::File, io, time::Instant};
-use utils::{MapErrsExt, SendErrorsExt};
+use utils::ParallelSendErrorsAsExt;
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
 use crate::models::LogEntry;
 use crate::parser::parse;
 use crate::parser::ParseError;
-use crate::utils::{ParallelMapErrsExt, ParallelSendErrorsExt};
 
 mod db;
 mod models;
@@ -106,11 +105,9 @@ fn parser_thread(msg_sender: Sender<Msg>, chunks_sender: Sender<ChunkMsg>) {
         // Parse all rows in parallel
         let mut entries = lines
             .into_par_iter()
-            .map_errs(Msg::LogFileIOError)
-            .send_errors(&msg_sender)
+            .send_errors_as(&msg_sender, Msg::LogFileIOError)
             .map(parse)
-            .map_errs(Msg::LogParseError)
-            .send_errors(&msg_sender)
+            .send_errors_as(&msg_sender, Msg::LogParseError)
             .map(|e| {
                 msg_sender.send(Msg::RowParsed).unwrap();
                 e

@@ -1,5 +1,7 @@
 use rayon::iter::ParallelIterator;
 
+use super::{MapErrs, ParallelMapErrs};
+
 // TODO: Simplyfy the generics, they are overqualifying
 
 #[must_use = "iterators are lazy and do nothing unless consumed"]
@@ -59,6 +61,41 @@ where
     /// Transmit errors to a channel, leaving Ok values in the iterator
     fn send_errors(self, channel: &crossbeam_channel::Sender<M>) -> SendErrors<T, M> {
         SendErrors::new(self, channel)
+    }
+}
+
+// Adds the `transmit_error` to the Iterator
+pub trait SendErrorsAsExt<T, V, E, M, E2, F>
+where
+    T: Iterator<Item = Result<V, E>>,
+    M: From<E2>,
+    F: Fn(E) -> E2 + Sync + Send,
+    V: Send,
+    E2: Send,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn send_errors_as(
+        self,
+        channel: &crossbeam_channel::Sender<M>,
+        map_op: F,
+    ) -> SendErrors<MapErrs<T, F>, M>;
+}
+
+impl<T, V, E, M, E2, F> SendErrorsAsExt<T, V, E, M, E2, F> for T
+where
+    T: Iterator<Item = Result<V, E>>,
+    M: From<E2>,
+    F: Fn(E) -> E2 + Sync + Send,
+    V: Send,
+    E2: Send,
+{
+    /// Transmit errors to a channel, leaving Ok values in the iterator
+    fn send_errors_as(
+        self,
+        channel: &crossbeam_channel::Sender<M>,
+        map_op: F,
+    ) -> SendErrors<MapErrs<T, F>, M> {
+        SendErrors::new(MapErrs::new(self, map_op), channel)
     }
 }
 
@@ -135,39 +172,37 @@ where
     }
 }
 
-/*
-// Adds the `send_error_as` to the ParallelIterator
+// Adds the `transmit_error` to the Iterator
 pub trait ParallelSendErrorsAsExt<T, V, E, M, E2, F>
 where
-    T: ParallelIterator<Item = Result<V, E2>>,
+    T: ParallelIterator<Item = Result<V, E>>,
     M: From<E2>,
-    F: Fn(E) -> E2 + Send + Sync,
+    F: Fn(E) -> E2 + Sync + Send,
+    V: Send,
+    E2: Send,
 {
     /// Transmit errors to a channel, leaving Ok values in the iterator
     fn send_errors_as(
         self,
         channel: &crossbeam_channel::Sender<M>,
-        f: F,
-    ) -> ParallelSendErrors<T, E2, V, M>;
+        map_op: F,
+    ) -> ParallelSendErrors<ParallelMapErrs<T, F>, E2, V, M>;
 }
 
-impl<I, T, V, E, M, E2, F> ParallelSendErrorsAsExt<T, V, E, M, E2, F> for I
+impl<T, V, E, M, E2, F> ParallelSendErrorsAsExt<T, V, E, M, E2, F> for T
 where
-    I: ParallelIterator<Item = Result<V, E>>,
-    T: ParallelIterator<Item = Result<V, E2>>,
+    T: ParallelIterator<Item = Result<V, E>>,
     M: From<E2>,
-    V: Send + Sync,
-    E2: Send + Sync,
-    F: Fn(E) -> E2 + Send + Sync,
+    F: Fn(E) -> E2 + Sync + Send,
+    V: Send,
+    E2: Send,
 {
     /// Transmit errors to a channel, leaving Ok values in the iterator
     fn send_errors_as(
         self,
         channel: &crossbeam_channel::Sender<M>,
-        f: F,
-    ) -> ParallelSendErrors<T, E2, V, M> {
-        let iter: T = self.map(|res| res.map_err(f)).into_par_iter();
-        ParallelSendErrors::new(iter, channel.clone())
+        map_op: F,
+    ) -> ParallelSendErrors<ParallelMapErrs<T, F>, E2, V, M> {
+        ParallelSendErrors::new(ParallelMapErrs::new(self, map_op), channel.clone())
     }
 }
- */
