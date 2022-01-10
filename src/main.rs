@@ -1,11 +1,12 @@
 use crossbeam_channel::{Receiver, Sender};
-use derive_more::{Display, Error, From};
+use derive_more::From;
 use itertools::Itertools;
 use rayon::prelude::*;
 use std::io::{BufRead, BufReader, Write};
 use std::thread;
 use std::time::Duration;
 use std::{fs::File, io, time::Instant};
+use utils::{MapErrsExt, SendErrorsExt};
 
 use crate::db::batch_insert;
 use crate::db::{init, BatchCache};
@@ -19,19 +20,13 @@ mod models;
 mod parser;
 mod utils;
 
-#[derive(From, Debug, Error, Display)]
-pub enum Error {
-    LogParseError(ParseError),
-    SqliteError(rusqlite::Error),
-    LogFileIOError(io::Error),
-}
-
-pub type Result<T, E = Error> = std::result::Result<T, E>;
-
 #[derive(From, Debug)]
 pub enum Msg {
-    Error(Error),
+    LogParseError(ParseError),
+    LogFileIOError(io::Error),
+    DbError(db::DbError),
     RowParsed,
+    RowUnique,
     RowInserted,
     AllParsingDone,
     AllInsertDone,
@@ -46,7 +41,9 @@ enum ChunkMsg {
 struct DrawState {
     parse_errors: usize,
     parsed: usize,
+    unique: usize,
     insert_errors: usize,
+    duplicates: usize,
     insertted: usize,
     drawed: Instant,
     started: Instant,
@@ -57,8 +54,10 @@ struct DrawState {
 impl DrawState {
     fn new() -> Self {
         Self {
+            duplicates: 0,
             insert_errors: 0,
             insertted: 0,
+            unique: 0,
             // last_errors: None,
             parse_errors: 0,
             parsed: 0,
@@ -107,16 +106,23 @@ fn parser_thread(msg_sender: Sender<Msg>, chunks_sender: Sender<ChunkMsg>) {
         // Parse all rows in parallel
         let mut entries = lines
             .into_par_iter()
-            .map_errs(Error::LogFileIOError)
+            .map_errs(Msg::LogFileIOError)
             .send_errors(&msg_sender)
             .map(parse)
-            .map_errs(Error::LogParseError)
+            .map_errs(Msg::LogParseError)
             .send_errors(&msg_sender)
             .map(|e| {
                 msg_sender.send(Msg::RowParsed).unwrap();
                 e
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+            .into_iter()
+            .unique_by(|e| (e.timestamp, e.user.hash, e.request.clone()))
+            .map(|e| {
+                msg_sender.send(Msg::RowUnique).unwrap();
+                e
+            })
+            .collect_vec();
 
         // Sort by timestamp
         entries.par_sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
@@ -167,17 +173,15 @@ fn msg_thread(msg_receiver: Receiver<Msg>) {
             Ok(msg) => match msg {
                 Msg::RowInserted => draw_state.insertted += 1,
                 Msg::RowParsed => draw_state.parsed += 1,
-                Msg::Error(err) => {
-                    match err {
-                        Error::LogFileIOError(_) => {}
-                        Error::LogParseError(_) => draw_state.parse_errors += 1,
-                        Error::SqliteError(_) => draw_state.insert_errors += 1,
-                    }
-                    // println!("err {}", err);
-                    // draw_state.errors.push(err);
-                }
+                Msg::RowUnique => draw_state.unique += 1,
                 Msg::AllParsingDone => {}
                 Msg::AllInsertDone => {}
+                Msg::LogFileIOError(_) => {}
+                Msg::LogParseError(_) => draw_state.parse_errors += 1,
+                Msg::DbError(err) => match err {
+                    db::DbError::SqliteError(_) => draw_state.insert_errors += 1,
+                    db::DbError::DuplicateEntry => draw_state.duplicates += 1,
+                },
             },
             Err(Disconnected) => break,
             Err(Timeout) => (),
@@ -194,8 +198,13 @@ fn msg_thread(msg_receiver: Receiver<Msg>) {
 
 fn draw(state: &DrawState) {
     print!(
-        "\rParsed {}, parse errors: {}. Inserted {}, insert errors {}.",
-        state.parsed, state.parse_errors, state.insertted, state.insert_errors
+        "\rParsed {}, errors {}, unique ~{}. Inserted {}, duplicates {}, insert errors {}.",
+        state.parsed,
+        state.parse_errors,
+        state.unique,
+        state.insertted,
+        state.duplicates,
+        state.insert_errors
     );
     let _ = io::stdout().flush();
     if let Some(ended) = state.ended {

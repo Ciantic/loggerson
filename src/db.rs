@@ -1,16 +1,25 @@
 use crate::{
     models::{LogEntry, Referrer, Request, User, Useragent},
-    utils::{ExtendTo, SendErrorsExt},
-    Error, Msg,
+    utils::{ExtendTo, MapErrsExt, SendErrorsExt},
+    Msg,
 };
+use derive_more::From;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection};
+use rusqlite::{ffi::SQLITE_CONSTRAINT, params, Connection, ErrorCode};
 use std::collections::HashMap;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
-pub fn init(path: &str) -> Result<Pool<SqliteConnectionManager>, rusqlite::Error> {
+#[derive(From, Debug)]
+pub enum DbError {
+    SqliteError(rusqlite::Error),
+    DuplicateEntry,
+}
+
+pub type Result<T, E = DbError> = std::result::Result<T, E>;
+
+pub fn init(path: &str) -> Result<Pool<SqliteConnectionManager>> {
     // let manager = SqliteConnectionManager::memory();
     let manager = SqliteConnectionManager::file(path);
     let pool = r2d2::Pool::new(manager).unwrap();
@@ -42,7 +51,7 @@ impl BatchCache {
         &mut self,
         con: &Connection,
         error_channel: &crossbeam_channel::Sender<Msg>,
-    ) -> rusqlite::Result<()> {
+    ) -> Result<()> {
         {
             // Update requests cache
             let mut stmt = con.prepare_cached(
@@ -62,7 +71,7 @@ impl BatchCache {
                         row.get(0)?,
                     ))
                 })
-                .map(|res| res.map_err(Error::SqliteError))
+                .map_errs(DbError::SqliteError)
                 .send_errors(&error_channel)
                 .extend_to(&mut self.requests_cache);
         }
@@ -92,7 +101,7 @@ impl BatchCache {
                         row.get(0)?,
                     ))
                 })
-                .map(|res| res.map_err(Error::SqliteError))
+                .map_errs(DbError::SqliteError)
                 .send_errors(&error_channel)
                 .extend_to(&mut self.users_cache);
         }
@@ -110,7 +119,7 @@ impl BatchCache {
 
             stmt.query([])?
                 .mapped(|row| Ok((Useragent { value: row.get(1)? }, row.get(0)?)))
-                .map(|res| res.map_err(Error::SqliteError))
+                .map_errs(DbError::SqliteError)
                 .send_errors(&error_channel)
                 .extend_to(&mut self.useragents_cache);
         }
@@ -128,7 +137,7 @@ impl BatchCache {
 
             stmt.query([])?
                 .mapped(|row| Ok((Referrer { url: row.get(1)? }, row.get(0)?)))
-                .map(|res| res.map_err(Error::SqliteError))
+                .map_errs(DbError::SqliteError)
                 .send_errors(&error_channel)
                 .extend_to(&mut self.referrer_cache);
         }
@@ -136,11 +145,7 @@ impl BatchCache {
     }
 }
 
-fn insert_request(
-    caches: &mut BatchCache,
-    con: &Connection,
-    request: &Request,
-) -> rusqlite::Result<i32> {
+fn insert_request(caches: &mut BatchCache, con: &Connection, request: &Request) -> Result<i32> {
     if let Some(request_id) = caches.requests_cache.get(request) {
         return Ok(request_id.to_owned());
     }
@@ -161,11 +166,7 @@ fn insert_request(
     Ok(request_id)
 }
 
-fn insert_useragent(
-    caches: &mut BatchCache,
-    con: &Connection,
-    object: &Useragent,
-) -> rusqlite::Result<i32> {
+fn insert_useragent(caches: &mut BatchCache, con: &Connection, object: &Useragent) -> Result<i32> {
     if let Some(request_id) = caches.useragents_cache.get(object) {
         return Ok(request_id.to_owned());
     }
@@ -188,10 +189,12 @@ fn insert_useragent(
     Ok(request_id)
 }
 
-fn insert_user(caches: &mut BatchCache, con: &Connection, object: &User) -> rusqlite::Result<i32> {
+fn insert_user(caches: &mut BatchCache, con: &Connection, object: &User) -> Result<i32> {
     if let Some(request_id) = caches.users_cache.get(object) {
         return Ok(request_id.to_owned());
     }
+
+    // TODO: Fail if user hash is null
 
     let useragent_id = object
         .useragent
@@ -216,11 +219,7 @@ fn insert_user(caches: &mut BatchCache, con: &Connection, object: &User) -> rusq
     Ok(request_id)
 }
 
-fn insert_referrer(
-    caches: &mut BatchCache,
-    con: &Connection,
-    referrer: &Referrer,
-) -> rusqlite::Result<i32> {
+fn insert_referrer(caches: &mut BatchCache, con: &Connection, referrer: &Referrer) -> Result<i32> {
     if let Some(request_id) = caches.referrer_cache.get(referrer) {
         return Ok(request_id.to_owned());
     }
@@ -243,11 +242,7 @@ fn insert_referrer(
     Ok(referrer_id)
 }
 
-fn insert_entry(
-    caches: &mut BatchCache,
-    con: &Connection,
-    object: &LogEntry,
-) -> rusqlite::Result<()> {
+fn insert_entry(caches: &mut BatchCache, con: &Connection, object: &LogEntry) -> Result<()> {
     let request_id = insert_request(caches, &con, &object.request)?;
     let user_id = insert_user(caches, &con, &object.user)?;
     let referrer_id = object
@@ -261,10 +256,20 @@ fn insert_entry(
             INSERT INTO
             entrys(timestamp, request_id, user_id, referrer_id)
             VALUES(?, ?, ?, ?)
-            ON CONFLICT DO NOTHING
             ",
     )?;
-    stmt.execute(params![object.timestamp, request_id, user_id, referrer_id])?;
+
+    stmt.execute(params![object.timestamp, request_id, user_id, referrer_id])
+        .map_err(|err| match err {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: ErrorCode::ConstraintViolation,
+                    extended_code: _,
+                },
+                _,
+            ) => DbError::DuplicateEntry,
+            er => DbError::SqliteError(er),
+        })?;
 
     Ok(())
 }
@@ -274,11 +279,10 @@ pub fn batch_insert(
     con: &Connection,
     entries: &Vec<LogEntry>,
     caches: &mut BatchCache,
-) -> rusqlite::Result<()> {
+) -> Result<()> {
     entries
         .iter()
         .map(|entry| insert_entry(caches, &con, entry))
-        .map(|res| res.map_err(Error::SqliteError))
         .send_errors(&msg_sender)
         .for_each(|_| msg_sender.send(Msg::RowInserted).unwrap());
     Ok(())
